@@ -40,7 +40,6 @@ type Detection = {
   frameIndex: number;
   timestamp: string;
   droneLocation: { lat: number; lng: number } | null;
-  locationSource?: string;
 };
 
 type Snapshot = {
@@ -78,30 +77,47 @@ export default function RescueCommandCenter() {
   const [thermalMode, setThermalMode] = useState(false);
   const [missionStartTime, setMissionStartTime] = useState<number | null>(null);
   const [elapsedTime, setElapsedTime] = useState("00:00");
+  const audioCtxRef = useRef<AudioContext | null>(null);
 
-  // Web Audio Tactical Beep Synthesizer
+  // Tactical Dual-Tone Audio Alert Chime (Aerospace Alert Tone)
   const playAlertSound = () => {
     if (!audioAlerts) return;
     try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       if (!AudioCtx) return;
-      const ctx = new AudioCtx();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new AudioCtx();
+      }
+      const ctx = audioCtxRef.current;
+      if (ctx.state === "suspended") {
+        ctx.resume();
+      }
 
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(880, ctx.currentTime);
-      osc.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.15);
+      // First beep (880 Hz - High pitch alert)
+      const osc1 = ctx.createOscillator();
+      const gain1 = ctx.createGain();
+      osc1.type = "sine";
+      osc1.frequency.setValueAtTime(880, ctx.currentTime);
+      gain1.gain.setValueAtTime(0.4, ctx.currentTime);
+      gain1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+      osc1.connect(gain1);
+      gain1.connect(ctx.destination);
+      osc1.start(ctx.currentTime);
+      osc1.stop(ctx.currentTime + 0.18);
 
-      gain.gain.setValueAtTime(0.3, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
-
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.35);
+      // Second beep (1320 Hz - Affirmative lock tone)
+      const osc2 = ctx.createOscillator();
+      const gain2 = ctx.createGain();
+      osc2.type = "sine";
+      osc2.frequency.setValueAtTime(1320, ctx.currentTime + 0.12);
+      gain2.gain.setValueAtTime(0.4, ctx.currentTime + 0.12);
+      gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.38);
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      osc2.start(ctx.currentTime + 0.12);
+      osc2.stop(ctx.currentTime + 0.38);
     } catch {
-      // Audio autoplay policy fallback
+      // Audio context policy
     }
   };
 
@@ -162,19 +178,43 @@ export default function RescueCommandCenter() {
     };
   }, [audioAlerts]);
 
-  // Mapbox Setup
+  // Mapbox Setup with Free Dark Tactical Raster Tile Fallback
   useEffect(() => {
-    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
-    if (!token) {
-      setError("Please configure NEXT_PUBLIC_MAPBOX_TOKEN in web/.env.local");
-      return;
-    }
     if (!mapContainer.current) return;
 
-    mapboxgl.accessToken = token;
+    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
+    if (token) {
+      mapboxgl.accessToken = token;
+    }
+
+    // High-contrast tactical dark map style (CartoDB Dark Matter raster tiles)
+    // Works 100% reliably out of the box with zero token requirements
+    const darkTacticalStyle: mapboxgl.Style = {
+      version: 8,
+      sources: {
+        "carto-dark": {
+          type: "raster",
+          tiles: [
+            "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+            "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+          ],
+          tileSize: 256
+        }
+      },
+      layers: [
+        {
+          id: "carto-dark-layer",
+          type: "raster",
+          source: "carto-dark",
+          minzoom: 0,
+          maxzoom: 20
+        }
+      ]
+    };
+
     const instance = new mapboxgl.Map({
       container: mapContainer.current,
-      style: "mapbox://styles/mapbox/dark-v11",
+      style: darkTacticalStyle,
       center: [77.5946, 12.9716],
       zoom: 14.5,
       pitch: 45
@@ -183,7 +223,7 @@ export default function RescueCommandCenter() {
     map.current = instance;
     instance.addControl(new mapboxgl.NavigationControl(), "top-right");
 
-    // Custom Drone Element
+    // Custom Drone Element with Radar Sweep
     const droneEl = document.createElement("div");
     droneEl.style.cssText = "position: relative; display: flex; align-items: center; justify-content: center;";
     droneEl.innerHTML = `
@@ -201,6 +241,7 @@ export default function RescueCommandCenter() {
     instance.on("click", async (e) => {
       try {
         setError("");
+        playAlertSound(); // Unlocks browser audio policy on user click
         const res = await fetch(`${API}/api/mission`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -284,6 +325,7 @@ export default function RescueCommandCenter() {
   // Quick Demo Dispatch
   const triggerQuickDemo = async () => {
     try {
+      playAlertSound(); // Unlocks audio on user click
       const res = await fetch(`${API}/api/mission`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -336,8 +378,8 @@ export default function RescueCommandCenter() {
           </div>
         </div>
 
-        {/* Quick Pitch Action Controls */}
-        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+        {/* Action Controls */}
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
           <button
             onClick={() => setThermalMode(!thermalMode)}
             style={{
@@ -358,6 +400,28 @@ export default function RescueCommandCenter() {
             <Flame size={14} /> FLIR THERMAL {thermalMode ? "ON" : "OFF"}
           </button>
 
+          {/* Test Audio Button */}
+          <button
+            onClick={playAlertSound}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              background: "rgba(34, 211, 238, 0.1)",
+              border: "1px solid var(--border-glow)",
+              color: "var(--cyan-bright)",
+              borderRadius: "6px",
+              padding: "6px 12px",
+              cursor: "pointer",
+              fontSize: "12px",
+              fontFamily: "var(--font-display)",
+              fontWeight: 600
+            }}
+            title="Click to test alert sound"
+          >
+            <Volume2 size={15} /> TEST AUDIO
+          </button>
+
           <button
             onClick={() => setAudioAlerts(!audioAlerts)}
             style={{
@@ -368,7 +432,7 @@ export default function RescueCommandCenter() {
               padding: "6px 10px",
               cursor: "pointer"
             }}
-            title="Audio Alert Chime"
+            title="Toggle Mute"
           >
             {audioAlerts ? <Volume2 size={16} /> : <VolumeX size={16} />}
           </button>
@@ -433,7 +497,7 @@ export default function RescueCommandCenter() {
       {/* 2. MAIN TACTICAL WORKSPACE (MAP + SIDEBAR) */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 440px", flex: 1, gap: "14px", padding: "0 14px 14px 14px", overflow: "hidden" }}>
         
-        {/* LEFT: 3D TACTICAL MAPBOX */}
+        {/* LEFT: 3D TACTICAL MAP */}
         <div className="glass-panel" style={{ position: "relative", overflow: "hidden", display: "flex", flexDirection: "column" }}>
           <div ref={mapContainer} style={{ width: "100%", height: "100%" }} />
 
@@ -561,7 +625,7 @@ export default function RescueCommandCenter() {
                 <div style={{ textAlign: "center", padding: "20px" }}>
                   <p style={{ fontSize: "12px", color: "#64748b", margin: 0 }}>
                     Awaiting Vision Worker Stream...<br />
-                    <span style={{ fontSize: "10px", color: "#475569" }}>Launch python workers/vision.py to connect</span>
+                    <span style={{ fontSize: "10px", color: "#475569" }}>Run `python vision.py` in workers/</span>
                   </p>
                 </div>
               )}
