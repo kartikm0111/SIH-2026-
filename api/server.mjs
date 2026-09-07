@@ -16,10 +16,10 @@ if (!workerToken) {
 }
 
 const io = new Server(server, {
-  cors: { origin, methods: ["GET", "POST"] },
+  cors: { origin: "*", methods: ["GET", "POST"] },
 });
 
-app.use(cors({ origin }));
+app.use(cors({ origin: "*" }));
 
 const home = {
   lat: Number(process.env.START_LAT || 12.9716),
