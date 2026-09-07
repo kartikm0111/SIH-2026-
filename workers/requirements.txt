@@ -1,0 +1,4 @@
+requests>=2.31,<3
+python-dotenv>=1,<2
+ultralytics>=8.2,<9
+opencv-python>=4.8,<5
