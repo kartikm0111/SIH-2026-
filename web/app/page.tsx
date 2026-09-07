@@ -353,6 +353,22 @@ export default function RescueCommandCenter() {
     URL.revokeObjectURL(url);
   };
 
+  // Return to Launch (RTL)
+  const triggerRTL = async () => {
+    try {
+      playAlertSound();
+      const res = await fetch(`${API}/api/mission`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat: 12.9716, lng: 77.5946 })
+      });
+      const data = await res.json();
+      setMission(data);
+    } catch {
+      setError("Failed to trigger RTL");
+    }
+  };
+
   // Quick Demo Dispatch
   const triggerQuickDemo = async () => {
     try {
