@@ -322,6 +322,37 @@ export default function RescueCommandCenter() {
     });
   }, [detections]);
 
+  // Export Incident Report
+  const exportIncidentReport = () => {
+    if (detections.length === 0) {
+      alert("No detections to export yet!");
+      return;
+    }
+    const report = {
+      incidentCode: `SAR-SIH-${new Date().toISOString().slice(0, 10)}`,
+      generatedAt: new Date().toISOString(),
+      homeBase: { lat: 12.9716, lng: 77.5946 },
+      totalConfirmedSurvivors: detections.length,
+      survivors: detections.map((d, index) => ({
+        index: index + 1,
+        id: d.id,
+        confidence: `${(d.confidence * 100).toFixed(1)}%`,
+        gpsLatitude: d.droneLocation?.lat,
+        gpsLongitude: d.droneLocation?.lng,
+        recordedFrame: d.frameIndex,
+        detectedTime: d.timestamp,
+        rescueStatus: "DISPATCH_AUTHORIZED"
+      }))
+    };
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `Rescue_Manifest_${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // Quick Demo Dispatch
   const triggerQuickDemo = async () => {
     try {
@@ -437,6 +468,26 @@ export default function RescueCommandCenter() {
             {audioAlerts ? <Volume2 size={16} /> : <VolumeX size={16} />}
           </button>
 
+          <button
+            onClick={triggerRTL}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "6px",
+              background: "rgba(245, 158, 11, 0.15)",
+              border: "1px solid rgba(245, 158, 11, 0.4)",
+              color: "var(--amber-warn)",
+              borderRadius: "6px",
+              padding: "6px 12px",
+              cursor: "pointer",
+              fontSize: "12px",
+              fontFamily: "var(--font-display)",
+              fontWeight: 600
+            }}
+            title="Return to Launch Home"
+          >
+            RTL (RETURN HOME)
+          </button>
           <button
             onClick={triggerQuickDemo}
             style={{
@@ -660,9 +711,28 @@ export default function RescueCommandCenter() {
               <span style={{ fontSize: "12px", letterSpacing: "1px", fontWeight: 700, color: "#94a3b8", display: "flex", alignItems: "center", gap: "6px" }}>
                 <ShieldAlert size={14} color="var(--rose-alert)" /> SURVIVOR DETECTION QUEUE
               </span>
-              <span style={{ fontSize: "10px", fontFamily: "var(--font-mono)", color: "var(--rose-alert)", background: "rgba(244, 63, 94, 0.15)", padding: "2px 6px", borderRadius: "3px" }}>
-                {detections.length} CONFIRMED
-              </span>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span style={{ fontSize: "10px", fontFamily: "var(--font-mono)", color: "var(--rose-alert)", background: "rgba(244, 63, 94, 0.15)", padding: "2px 6px", borderRadius: "3px" }}>
+                  {detections.length} CONFIRMED
+                </span>
+                <button
+                  onClick={exportIncidentReport}
+                  style={{
+                    background: "rgba(34, 211, 238, 0.1)",
+                    border: "1px solid var(--border-glow)",
+                    color: "var(--cyan-bright)",
+                    padding: "3px 8px",
+                    borderRadius: "4px",
+                    fontSize: "10px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    fontFamily: "var(--font-mono)"
+                  }}
+                  title="Export Manifest for Ground Rescue Teams"
+                >
+                  EXPORT MANIFEST
+                </button>
+              </div>
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: "8px", overflowY: "auto", maxHeight: "200px" }}>
