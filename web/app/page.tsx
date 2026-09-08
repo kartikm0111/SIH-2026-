@@ -34,6 +34,7 @@ import {
   DEMO_OBSTACLES,
   EMERGENCY_NEEDS_CATALOG
 } from "./types";
+import GimbalFeed from "./components/GimbalFeed";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
 
@@ -1068,57 +1069,16 @@ export default function RescueCommandCenter() {
                 </div>
               </div>
 
-              {/* Video Viewport with HUD Crosshair & Scanlines */}
+              {/* Responsive AI Aerial Gimbal Stream with FLIR Thermal Radiometrics & Optical Engine */}
               {!isCameraCollapsed && (
-                <div className={`scanlines ${thermalMode ? "thermal-mode" : ""}`} style={{
-                  position: "relative",
-                  aspectRatio: "16/9",
-                  background: "#000",
-                  borderRadius: "6px",
-                  overflow: "hidden",
-                  border: "1px solid rgba(255, 255, 255, 0.1)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center"
-                }}>
-                  {frameVersion > 0 ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={`${API}/api/frame?v=${frameVersion}`}
-                      alt="Aerial YOLO Feed"
-                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                    />
-                  ) : (
-                    <div style={{ textAlign: "center", padding: "20px" }}>
-                      <p style={{ fontSize: "12px", color: "#64748b", margin: 0 }}>
-                        AI Aerial Gimbal Stream Armed<br />
-                        <span style={{ fontSize: "10px", color: "#475569" }}>Tracking Search & Rescue Grid (FLIR Optical)</span>
-                      </p>
-                    </div>
-                  )}
-
-                  {/* HUD Reticle Overlay */}
-                  <div style={{
-                    position: "absolute",
-                    inset: 0,
-                    pointerEvents: "none",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center"
-                  }}>
-                    <div style={{ width: "40px", height: "40px", border: "1px dashed rgba(0, 242, 254, 0.4)", borderRadius: "50%" }}></div>
-                    <div style={{ position: "absolute", width: "16px", height: "1px", background: "rgba(0, 242, 254, 0.6)" }}></div>
-                    <div style={{ position: "absolute", height: "16px", width: "1px", background: "rgba(0, 242, 254, 0.6)" }}></div>
-                    
-                    {/* HUD Camera Stats */}
-                    <div style={{ position: "absolute", bottom: "8px", left: "8px", fontSize: "10px", fontFamily: "var(--font-mono)", color: "var(--cyan-bright)" }}>
-                      FOV: 84° // ALT: {telemetry.altitude.toFixed(0)}m
-                    </div>
-                    <div style={{ position: "absolute", top: "8px", right: "8px", fontSize: "10px", fontFamily: "var(--font-mono)", color: "#10b981" }}>
-                      REC ● 640x480
-                    </div>
-                  </div>
-                </div>
+                <GimbalFeed
+                  telemetry={telemetry}
+                  thermalMode={thermalMode}
+                  onToggleThermal={() => setThermalMode(!thermalMode)}
+                  detections={detections}
+                  frameVersion={frameVersion}
+                  apiUrl={API}
+                />
               )}
             </div>
           )}
