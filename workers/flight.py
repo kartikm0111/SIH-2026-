@@ -14,6 +14,13 @@ def distance_meters(lat1, lng1, lat2, lng2):
     return math.hypot(north, east)
 
 
+OBSTACLES = [
+    {"name": "Transmission Pylon", "lat": 12.9738, "lng": 77.5975, "radius": 45},
+    {"name": "Dense Ridge Canopy", "lat": 12.9752, "lng": 77.5992, "radius": 35},
+    {"name": "Structural Ruins", "lat": 12.9725, "lng": 77.5960, "radius": 40},
+]
+
+
 class MockDrone:
     def __init__(self, initial):
         self.lat = initial["lat"]
@@ -22,6 +29,8 @@ class MockDrone:
         self.battery = 100.0
         self.mode = "IDLE"
         self.target = None
+        self.obstacle_near = False
+        self.obstacle_name = None
 
     def start_mission(self, mission):
         self.target = mission
@@ -48,16 +57,38 @@ class MockDrone:
                 self.target["lng"],
             )
 
+            near_obs = None
+            for obs in OBSTACLES:
+                dist_obs = distance_meters(self.lat, self.lng, obs["lat"], obs["lng"])
+                if dist_obs < 60:
+                    near_obs = obs
+                    break
+
             if distance <= 2:
                 self.lat = self.target["lat"]
                 self.lng = self.target["lng"]
                 self.mode = "ARRIVED"
+                self.obstacle_near = False
+                self.obstacle_name = None
             else:
-                # Kinematic simulation, not flight dynamics.
                 fraction = min(1.0, 18 * dt / distance)
-                self.lat += (self.target["lat"] - self.lat) * fraction
-                self.lng += (self.target["lng"] - self.lng) * fraction
-                self.mode = "EN_ROUTE"
+                step_lat = (self.target["lat"] - self.lat) * fraction
+                step_lng = (self.target["lng"] - self.lng) * fraction
+
+                if near_obs:
+                    # Dynamic yaw detour vector to prevent collision
+                    step_lat += 0.00010
+                    step_lng += 0.00008
+                    self.mode = "AVOIDING_OBSTACLE"
+                    self.obstacle_near = True
+                    self.obstacle_name = near_obs["name"]
+                else:
+                    self.mode = "EN_ROUTE"
+                    self.obstacle_near = False
+                    self.obstacle_name = None
+
+                self.lat += step_lat
+                self.lng += step_lng
 
         self.battery = max(0, self.battery - 0.015 * dt)
 
@@ -69,6 +100,8 @@ class MockDrone:
             "battery": self.battery,
             "mode": self.mode,
             "source": "mock",
+            "obstacleNear": self.obstacle_near,
+            "obstacleName": self.obstacle_name,
         }
 
     def close(self):

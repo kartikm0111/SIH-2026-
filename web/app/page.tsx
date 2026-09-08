@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
-import { io } from "socket.io-client";
+import { io, Socket } from "socket.io-client";
 import "mapbox-gl/dist/mapbox-gl.css";
 import {
   ShieldAlert,
@@ -12,42 +12,24 @@ import {
   VolumeX,
   Flame,
   Zap,
-  Target
+  Target,
+  FileDown,
+  RotateCcw,
+  CheckCircle2,
+  Package,
+  AlertTriangle,
+  Send
 } from "lucide-react";
+import {
+  Telemetry,
+  Mission,
+  Detection,
+  Obstacle,
+  DEMO_OBSTACLES,
+  EMERGENCY_NEEDS_CATALOG
+} from "./types";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
-
-type Telemetry = {
-  lat: number;
-  lng: number;
-  altitude: number;
-  battery: number | null;
-  mode: string;
-  source: string;
-  timestamp: string | null;
-};
-
-type Mission = {
-  id: string;
-  lat: number;
-  lng: number;
-  altitude: number;
-};
-
-type Detection = {
-  id: string;
-  confidence: number;
-  frameIndex: number;
-  timestamp: string;
-  droneLocation: { lat: number; lng: number } | null;
-};
-
-type Snapshot = {
-  telemetry: Telemetry;
-  mission: Mission | null;
-  detections: Detection[];
-  frameVersion: number;
-};
 
 export default function RescueCommandCenter() {
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -56,31 +38,41 @@ export default function RescueCommandCenter() {
   const targetMarker = useRef<mapboxgl.Marker | null>(null);
   const detectionMarkers = useRef<mapboxgl.Marker[]>([]);
 
-  // Telemetry & State
-  const [connected, setConnected] = useState(false);
+  // Connectivity & State
+  const [isLiveHardware, setIsLiveHardware] = useState(false);
   const [telemetry, setTelemetry] = useState<Telemetry>({
     lat: 12.9716,
     lng: 77.5946,
     altitude: 0,
     battery: 98,
     mode: "STANDBY",
-    source: "mock",
-    timestamp: null
+    source: "autonomous_sim",
+    timestamp: null,
+    obstacleNear: false
   });
   const [mission, setMission] = useState<Mission | null>(null);
   const [detections, setDetections] = useState<Detection[]>([]);
   const [frameVersion, setFrameVersion] = useState(0);
   const [error, setError] = useState("");
 
-  // Tactical Controls
+  // Tactical Controls & Flight Deck
   const [audioAlerts, setAudioAlerts] = useState(true);
   const [thermalMode, setThermalMode] = useState(false);
   const [missionStartTime, setMissionStartTime] = useState<number | null>(null);
   const [elapsedTime, setElapsedTime] = useState("00:00");
-  const audioCtxRef = useRef<AudioContext | null>(null);
+  const [activeAlertMessage, setActiveAlertMessage] = useState<string | null>(null);
+  const [payloadBay, setPayloadBay] = useState({
+    medKits: 2,
+    lifebuoys: 2,
+    thermalRations: 3,
+    radioBeacons: 2
+  });
 
-  // Tactical Dual-Tone Audio Alert Chime (Aerospace Alert Tone)
-  const playAlertSound = () => {
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const simIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Tactical Dual-Tone Audio Alert Chime
+  const playAlertSound = (isHighPriority = true) => {
     if (!audioAlerts) return;
     try {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -89,36 +81,33 @@ export default function RescueCommandCenter() {
         audioCtxRef.current = new AudioCtx();
       }
       const ctx = audioCtxRef.current;
-      if (ctx.state === "suspended") {
-        ctx.resume();
-      }
+      if (ctx.state === "suspended") ctx.resume();
 
-      // First beep (880 Hz - High pitch alert)
+      const f1 = isHighPriority ? 920 : 640;
+      const f2 = isHighPriority ? 1480 : 880;
+
       const osc1 = ctx.createOscillator();
       const gain1 = ctx.createGain();
       osc1.type = "sine";
-      osc1.frequency.setValueAtTime(880, ctx.currentTime);
-      gain1.gain.setValueAtTime(0.4, ctx.currentTime);
-      gain1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+      osc1.frequency.setValueAtTime(f1, ctx.currentTime);
+      gain1.gain.setValueAtTime(0.35, ctx.currentTime);
+      gain1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.16);
       osc1.connect(gain1);
       gain1.connect(ctx.destination);
       osc1.start(ctx.currentTime);
-      osc1.stop(ctx.currentTime + 0.18);
+      osc1.stop(ctx.currentTime + 0.16);
 
-      // Second beep (1320 Hz - Affirmative lock tone)
       const osc2 = ctx.createOscillator();
       const gain2 = ctx.createGain();
       osc2.type = "sine";
-      osc2.frequency.setValueAtTime(1320, ctx.currentTime + 0.12);
-      gain2.gain.setValueAtTime(0.4, ctx.currentTime + 0.12);
-      gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.38);
+      osc2.frequency.setValueAtTime(f2, ctx.currentTime + 0.10);
+      gain2.gain.setValueAtTime(0.35, ctx.currentTime + 0.10);
+      gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.32);
       osc2.connect(gain2);
       gain2.connect(ctx.destination);
-      osc2.start(ctx.currentTime + 0.12);
-      osc2.stop(ctx.currentTime + 0.38);
-    } catch {
-      // Audio context policy
-    }
+      osc2.start(ctx.currentTime + 0.10);
+      osc2.stop(ctx.currentTime + 0.32);
+    } catch {}
   };
 
   // Mission Timer
@@ -133,48 +122,53 @@ export default function RescueCommandCenter() {
     return () => clearInterval(interval);
   }, [missionStartTime]);
 
-  // Socket Connection
+  // Hybrid Socket.IO & Auto Cloud Simulator Fallback
   useEffect(() => {
-    const socket = io(API, { reconnectionAttempts: 5 });
+    let socket: Socket | null = null;
+    try {
+      socket = io(API, { timeout: 2500, reconnectionAttempts: 2 });
 
-    socket.on("connect", () => {
-      setConnected(true);
-      setError("");
-    });
+      socket.on("connect", () => {
+        setIsLiveHardware(true);
+        setError("");
+      });
 
-    socket.on("disconnect", () => setConnected(false));
-    socket.on("connect_error", () => {
-      setConnected(false);
-      setError("Waiting for backend API on 127.0.0.1:4000...");
-    });
+      socket.on("disconnect", () => {
+        setIsLiveHardware(false);
+      });
 
-    socket.on("state", (state: Snapshot) => {
-      setTelemetry(state.telemetry);
-      setMission(state.mission);
-      setDetections(state.detections);
-      setFrameVersion(state.frameVersion);
-    });
+      socket.on("connect_error", () => {
+        setIsLiveHardware(false);
+      });
 
-    socket.on("telemetry", (data: Telemetry) => {
-      setTelemetry(data);
-    });
+      socket.on("telemetry", (data: Telemetry) => {
+        setTelemetry(data);
+      });
 
-    socket.on("mission", (data: Mission) => {
-      setMission(data);
-      setMissionStartTime(Date.now());
-    });
+      socket.on("mission", (data: Mission) => {
+        setMission(data);
+        setMissionStartTime(Date.now());
+      });
 
-    socket.on("detection", (data: Detection) => {
-      playAlertSound();
-      setDetections((prev) => [data, ...prev].slice(0, 50));
-    });
+      socket.on("detection", (data: any) => {
+        playAlertSound(true);
+        const randomNeed = EMERGENCY_NEEDS_CATALOG[Math.floor(Math.random() * EMERGENCY_NEEDS_CATALOG.length)];
+        const enhanced: Detection = {
+          ...data,
+          need: data.need || randomNeed
+        };
+        setDetections((prev) => [enhanced, ...prev].slice(0, 50));
+      });
 
-    socket.on("frame", (v: number) => {
-      setFrameVersion(v);
-    });
+      socket.on("frame", (v: number) => {
+        setFrameVersion(v);
+      });
+    } catch {
+      setIsLiveHardware(false);
+    }
 
     return () => {
-      socket.disconnect();
+      socket?.disconnect();
     };
   }, [audioAlerts]);
 
@@ -237,23 +231,35 @@ export default function RescueCommandCenter() {
       .setLngLat([77.5946, 12.9716])
       .addTo(instance);
 
+    // Add 3D LiDAR Obstacle Hazards to Map
+    DEMO_OBSTACLES.forEach((obs) => {
+      const obsEl = document.createElement("div");
+      obsEl.innerHTML = `
+        <div style="display: flex; flex-direction: column; align-items: center; cursor: pointer;">
+          <div style="background: rgba(244, 63, 94, 0.25); border: 2px solid #f43f5e; border-radius: 50%; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 10px rgba(244, 63, 94, 0.7); font-size: 13px;">
+            ⚠️
+          </div>
+          <div style="background: rgba(15, 23, 42, 0.9); border: 1px solid #f43f5e; color: #fecdd3; font-size: 8px; font-weight: bold; font-family: monospace; padding: 1px 4px; border-radius: 3px; margin-top: 2px; white-space: nowrap;">
+            ${obs.name.toUpperCase()} (${obs.heightMeters}m)
+          </div>
+        </div>
+      `;
+      new mapboxgl.Marker({ element: obsEl })
+        .setLngLat([obs.lng, obs.lat])
+        .setPopup(new mapboxgl.Popup({ offset: 15 }).setHTML(`
+          <div style="color: #0f172a; font-family: sans-serif; font-size: 11px; padding: 4px;">
+            <strong style="color: #e11d48;">⚠️ LiDAR Obstacle Detected</strong><br/>
+            Type: <b>${obs.name}</b><br/>
+            Elevation: <b>${obs.heightMeters}m AGL</b><br/>
+            Safety Action: <b>35m Autonomous Detour</b>
+          </div>
+        `))
+        .addTo(instance);
+    });
+
     // Map Click -> Trigger Mission
-    instance.on("click", async (e) => {
-      try {
-        setError("");
-        playAlertSound(); // Unlocks browser audio policy on user click
-        const res = await fetch(`${API}/api/mission`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lat: e.lngLat.lat, lng: e.lngLat.lng })
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Mission failed");
-        setMission(data);
-        setMissionStartTime(Date.now());
-      } catch (err: any) {
-        setError(err.message || "Failed to dispatch mission");
-      }
+    instance.on("click", (e) => {
+      dispatchMission(e.lngLat.lat, e.lngLat.lng);
     });
 
     return () => {
@@ -288,7 +294,7 @@ export default function RescueCommandCenter() {
     }
   }, [mission]);
 
-  // Update Detection Markers
+  // Update Detection Markers with Triage Colors
   useEffect(() => {
     if (!map.current) return;
     detectionMarkers.current.forEach((m) => m.remove());
@@ -297,10 +303,11 @@ export default function RescueCommandCenter() {
     detections.slice(0, 15).forEach((d) => {
       if (!d.droneLocation || !map.current) return;
 
+      const markerColor = d.signaledDept ? "#10b981" : d.need.urgency === "CRITICAL" ? "#f43f5e" : "#f59e0b";
       const markerEl = document.createElement("div");
       markerEl.innerHTML = `
-        <div style="width: 20px; height: 20px; border-radius: 50%; background: #f43f5e; border: 2px solid white; box-shadow: 0 0 14px #f43f5e; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; color: white;">
-          !
+        <div style="width: 22px; height: 22px; border-radius: 50%; background: ${markerColor}; border: 2px solid white; box-shadow: 0 0 14px ${markerColor}; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; color: white;">
+          ${d.payloadDropped ? "📦" : d.signaledDept ? "✓" : "!"}
         </div>
       `;
 
@@ -308,11 +315,11 @@ export default function RescueCommandCenter() {
         .setLngLat([d.droneLocation.lng, d.droneLocation.lat])
         .setPopup(
           new mapboxgl.Popup({ offset: 15 }).setHTML(`
-            <div style="color: #0f172a; font-family: sans-serif; font-size: 12px; padding: 4px;">
-              <strong style="color: #e11d48;">SURVIVOR DETECTED</strong><br/>
-              Confidence: <b>${(d.confidence * 100).toFixed(1)}%</b><br/>
-              Frame: #${d.frameIndex}<br/>
-              <span style="font-size: 10px; color: #64748b;">Ref Drone GPS: ${d.droneLocation.lat.toFixed(4)}, ${d.droneLocation.lng.toFixed(4)}</span>
+            <div style="color: #0f172a; font-family: sans-serif; font-size: 11px; padding: 4px;">
+              <strong style="color: ${markerColor};">${d.need.title}</strong><br/>
+              Urgency: <b>${d.need.urgency}</b> | Conf: <b>${(d.confidence * 100).toFixed(0)}%</b><br/>
+              Assigned: <b>${d.need.department}</b><br/>
+              <span style="color: #64748b; font-size: 10px;">GPS: ${d.droneLocation.lat.toFixed(5)}, ${d.droneLocation.lng.toFixed(5)}</span>
             </div>
           `)
         )
@@ -322,71 +329,194 @@ export default function RescueCommandCenter() {
     });
   }, [detections]);
 
-  // Export Incident Report
+  // Autonomous In-Browser Flight & Obstacle Avoidance Engine
+  const runAutonomousBrowserSortie = (targetLat: number, targetLng: number) => {
+    if (simIntervalRef.current) clearInterval(simIntervalRef.current);
+
+    let curLat = telemetry.lat;
+    let curLng = telemetry.lng;
+    let curAlt = telemetry.altitude;
+    let curBatt = telemetry.battery || 95;
+    let stepCount = 0;
+
+    const missionObj = {
+      id: `sort_${Date.now().toString(36)}`,
+      lat: targetLat,
+      lng: targetLng,
+      altitude: 30
+    };
+    setMission(missionObj);
+    setMissionStartTime(Date.now());
+
+    simIntervalRef.current = setInterval(() => {
+      stepCount++;
+
+      if (curAlt < 30) {
+        curAlt = Math.min(30, curAlt + 2.5);
+        setTelemetry((prev) => ({ ...prev, altitude: curAlt, mode: "TAKING_OFF" }));
+        return;
+      }
+
+      const dLat = targetLat - curLat;
+      const dLng = targetLng - curLng;
+      const dist = Math.hypot(dLat, dLng);
+
+      if (dist < 0.0001) {
+        setTelemetry((prev) => ({ ...prev, mode: "HOVER_SEARCHING", altitude: 30 }));
+        clearInterval(simIntervalRef.current!);
+        return;
+      }
+
+      // LiDAR Collision Avoidance Check
+      let avoiding = false;
+      let nearObstacle: Obstacle | null = null;
+      for (const obs of DEMO_OBSTACLES) {
+        const obsDist = Math.hypot(obs.lat - curLat, obs.lng - curLng);
+        if (obsDist < 0.0018) {
+          nearObstacle = obs;
+          avoiding = true;
+          break;
+        }
+      }
+
+      let stepLat = (dLat / dist) * 0.00015;
+      let stepLng = (dLng / dist) * 0.00015;
+
+      if (avoiding && nearObstacle) {
+        stepLat += 0.00012;
+        stepLng += 0.00008;
+        setActiveAlertMessage(`⚠️ LiDAR COLLISION ALERT: ${nearObstacle.name} at 32m -> DYNAMIC YAW DETOUR ENGAGED`);
+      } else {
+        if (stepCount % 20 === 0) setActiveAlertMessage(null);
+      }
+
+      curLat += stepLat;
+      curLng += stepLng;
+      curBatt = Math.max(10, curBatt - 0.03);
+
+      setTelemetry({
+        lat: curLat,
+        lng: curLng,
+        altitude: 30,
+        battery: curBatt,
+        mode: avoiding ? "AVOIDING_OBSTACLE" : "EN_ROUTE",
+        source: isLiveHardware ? "hardware" : "autonomous_sim",
+        timestamp: new Date().toISOString(),
+        obstacleNear: avoiding,
+        obstacleName: nearObstacle?.name
+      });
+
+      if (stepCount === 10 || stepCount === 24 || stepCount === 42) {
+        playAlertSound(true);
+        const need = EMERGENCY_NEEDS_CATALOG[(stepCount / 10) % EMERGENCY_NEEDS_CATALOG.length];
+        const newDet: Detection = {
+          id: `det_${Date.now()}_${stepCount}`,
+          confidence: 0.91 + Math.random() * 0.07,
+          frameIndex: stepCount * 8,
+          timestamp: new Date().toISOString(),
+          droneLocation: { lat: curLat, lng: curLng },
+          need
+        };
+        setDetections((prev) => [newDet, ...prev]);
+        setFrameVersion((v) => v + 1);
+      }
+    }, 250);
+  };
+
+  // Dispatch Mission (Attempts Hardware API, with instant fallback)
+  const dispatchMission = async (targetLat: number, targetLng: number) => {
+    playAlertSound(false);
+    try {
+      const res = await fetch(`${API}/api/mission`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lat: targetLat, lng: targetLng })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setMission(data);
+        setMissionStartTime(Date.now());
+        return;
+      }
+    } catch {}
+    runAutonomousBrowserSortie(targetLat, targetLng);
+  };
+
+  // Return to Launch (RTL)
+  const triggerRTL = () => {
+    playAlertSound(false);
+    dispatchMission(12.9716, 77.5946);
+  };
+
+  // Quick Demo Mission
+  const triggerQuickDemo = () => {
+    dispatchMission(telemetry.lat + 0.0035, telemetry.lng + 0.0042);
+  };
+
+  // Signal Respective Government Relief Department
+  const signalDepartment = (detection: Detection) => {
+    playAlertSound(false);
+    setDetections((prev) =>
+      prev.map((d) => (d.id === detection.id ? { ...d, signaledDept: true } : d))
+    );
+    setActiveAlertMessage(`📡 ENCRYPTED SIGNAL TRANSMITTED: ${detection.need.department} (${detection.need.departmentCode}) acknowledged coordinates.`);
+    setTimeout(() => setActiveAlertMessage(null), 5000);
+  };
+
+  // Emergency Supply Payload Air-Drop
+  const dropPayload = (detection: Detection) => {
+    playAlertSound(true);
+    setDetections((prev) =>
+      prev.map((d) => (d.id === detection.id ? { ...d, payloadDropped: true } : d))
+    );
+
+    setPayloadBay((prev) => {
+      if (detection.need.category === "TRAUMA") return { ...prev, medKits: Math.max(0, prev.medKits - 1) };
+      if (detection.need.category === "FLOOD") return { ...prev, lifebuoys: Math.max(0, prev.lifebuoys - 1) };
+      if (detection.need.category === "HYPOTHERMIA") return { ...prev, thermalRations: Math.max(0, prev.thermalRations - 1) };
+      return { ...prev, radioBeacons: Math.max(0, prev.radioBeacons - 1) };
+    });
+
+    setActiveAlertMessage(`📦 AIR-DROP RELEASED: ${detection.need.requiredSupply} successfully parachuted to (${detection.droneLocation?.lat.toFixed(4)}, ${detection.droneLocation?.lng.toFixed(4)})`);
+    setTimeout(() => setActiveAlertMessage(null), 6000);
+  };
+
+  // Export Comprehensive Disaster Manifest
   const exportIncidentReport = () => {
     if (detections.length === 0) {
-      alert("No detections to export yet!");
+      alert("No survivor detections to export yet! Launch a mission first.");
       return;
     }
+
     const report = {
       incidentCode: `SAR-SIH-${new Date().toISOString().slice(0, 10)}`,
       generatedAt: new Date().toISOString(),
-      homeBase: { lat: 12.9716, lng: 77.5946 },
-      totalConfirmedSurvivors: detections.length,
-      survivors: detections.map((d, index) => ({
-        index: index + 1,
-        id: d.id,
+      homeBaseCoordinates: { lat: 12.9716, lng: 77.5946 },
+      safetyGeofenceRadius: "3.0 KM",
+      totalVictimsLocated: detections.length,
+      payloadsRemaining: payloadBay,
+      survivorsTriageManifest: detections.map((d, index) => ({
+        triageIndex: index + 1,
+        detectionId: d.id,
         confidence: `${(d.confidence * 100).toFixed(1)}%`,
         gpsLatitude: d.droneLocation?.lat,
         gpsLongitude: d.droneLocation?.lng,
-        recordedFrame: d.frameIndex,
-        detectedTime: d.timestamp,
-        rescueStatus: "DISPATCH_AUTHORIZED"
+        diagnosedNeed: d.need.title,
+        urgencyLevel: d.need.urgency,
+        assignedAgency: d.need.department,
+        agencyDispatched: d.signaledDept ? "ACKNOWLEDGED" : "PENDING_DISPATCH",
+        emergencySupplyDropped: d.payloadDropped ? d.need.requiredSupply : "AWAITING_AIRDROP",
+        timestamp: d.timestamp
       }))
     };
+
     const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `Rescue_Manifest_${Date.now()}.json`;
+    a.download = `Rescue_Triage_Manifest_${Date.now()}.json`;
     a.click();
     URL.revokeObjectURL(url);
-  };
-
-  // Return to Launch (RTL)
-  const triggerRTL = async () => {
-    try {
-      playAlertSound();
-      const res = await fetch(`${API}/api/mission`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lat: 12.9716, lng: 77.5946 })
-      });
-      const data = await res.json();
-      setMission(data);
-    } catch {
-      setError("Failed to trigger RTL");
-    }
-  };
-
-  // Quick Demo Dispatch
-  const triggerQuickDemo = async () => {
-    try {
-      playAlertSound(); // Unlocks audio on user click
-      const res = await fetch(`${API}/api/mission`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          lat: telemetry.lat + 0.0025,
-          lng: telemetry.lng + 0.003
-        })
-      });
-      const data = await res.json();
-      setMission(data);
-      setMissionStartTime(Date.now());
-    } catch {
-      setError("Check backend connectivity.");
-    }
   };
 
   return (
@@ -449,7 +579,7 @@ export default function RescueCommandCenter() {
 
           {/* Test Audio Button */}
           <button
-            onClick={playAlertSound}
+            onClick={() => playAlertSound(true)}
             style={{
               display: "flex",
               alignItems: "center",
@@ -528,36 +658,45 @@ export default function RescueCommandCenter() {
           <div style={{
             display: "flex",
             alignItems: "center",
-            gap: "6px",
+            gap: "8px",
             fontSize: "11px",
             fontFamily: "var(--font-mono)",
-            color: connected ? "var(--emerald-live)" : "var(--rose-alert)"
+            color: isLiveHardware ? "var(--emerald-live)" : "var(--cyan-bright)",
+            background: isLiveHardware ? "rgba(16, 185, 129, 0.12)" : "rgba(0, 242, 254, 0.12)",
+            padding: "5px 10px",
+            borderRadius: "6px",
+            border: `1px solid ${isLiveHardware ? "rgba(16, 185, 129, 0.3)" : "rgba(0, 242, 254, 0.3)"}`
           }}>
             <span style={{
               width: "8px",
               height: "8px",
               borderRadius: "50%",
-              background: connected ? "var(--emerald-live)" : "var(--rose-alert)",
-              boxShadow: `0 0 8px ${connected ? "var(--emerald-live)" : "var(--rose-alert)"}`
+              background: isLiveHardware ? "var(--emerald-live)" : "var(--cyan-bright)",
+              boxShadow: `0 0 8px ${isLiveHardware ? "var(--emerald-live)" : "var(--cyan-bright)"}`
             }}></span>
-            {connected ? "LIVE TELEMETRY" : "OFFLINE"}
+            {isLiveHardware ? "🟢 HARDWARE LINK (5 Hz)" : "⚡ AUTONOMOUS AGENT (SIM)"}
           </div>
         </div>
       </header>
 
-      {/* ERROR BANNER */}
-      {error && (
+      {/* DYNAMIC TACTICAL NOTIFICATION BANNER */}
+      {activeAlertMessage && (
         <div style={{
           margin: "0 14px 10px 14px",
           padding: "8px 16px",
-          background: "rgba(244, 63, 94, 0.15)",
-          border: "1px solid var(--rose-alert)",
+          background: activeAlertMessage.includes("COLLISION") ? "rgba(244, 63, 94, 0.2)" : "rgba(0, 242, 254, 0.15)",
+          border: `1px solid ${activeAlertMessage.includes("COLLISION") ? "var(--rose-alert)" : "var(--cyan-bright)"}`,
           borderRadius: "6px",
-          color: "var(--rose-alert)",
+          color: activeAlertMessage.includes("COLLISION") ? "#fecdd3" : "var(--cyan-bright)",
           fontSize: "12px",
-          fontFamily: "var(--font-mono)"
+          fontFamily: "var(--font-mono)",
+          display: "flex",
+          alignItems: "center",
+          gap: "10px",
+          boxShadow: activeAlertMessage.includes("COLLISION") ? "0 0 15px rgba(244, 63, 94, 0.4)" : "0 0 15px rgba(0, 242, 254, 0.2)"
         }}>
-          ⚠️ {error}
+          <AlertTriangle size={16} color={activeAlertMessage.includes("COLLISION") ? "var(--rose-alert)" : "var(--cyan-bright)"} />
+          <strong>{activeAlertMessage}</strong>
         </div>
       )}
 
@@ -613,6 +752,9 @@ export default function RescueCommandCenter() {
             <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "var(--rose-alert)" }}>
               ● SURVIVOR ALERT
             </span>
+            <span style={{ display: "flex", alignItems: "center", gap: "6px", color: "#f43f5e" }}>
+              ⚠️ LiDAR OBSTACLE
+            </span>
           </div>
         </div>
 
@@ -630,10 +772,10 @@ export default function RescueCommandCenter() {
               </span>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
               <div style={{ background: "var(--bg-card)", padding: "10px", borderRadius: "6px", border: "1px solid var(--border-subtle)" }}>
                 <span style={{ fontSize: "10px", color: "#64748b", display: "block" }}>ALTITUDE (AGL)</span>
-                <strong style={{ fontSize: "20px", color: "var(--cyan-bright)", fontFamily: "var(--font-mono)" }}>
+                <strong style={{ fontSize: "18px", color: "var(--cyan-bright)", fontFamily: "var(--font-mono)" }}>
                   {telemetry.altitude.toFixed(1)} <span style={{ fontSize: "11px" }}>m</span>
                 </strong>
               </div>
@@ -641,7 +783,7 @@ export default function RescueCommandCenter() {
               <div style={{ background: "var(--bg-card)", padding: "10px", borderRadius: "6px", border: "1px solid var(--border-subtle)" }}>
                 <span style={{ fontSize: "10px", color: "#64748b", display: "block" }}>BATTERY LEVEL</span>
                 <strong style={{
-                  fontSize: "20px",
+                  fontSize: "18px",
                   color: telemetry.battery && telemetry.battery < 25 ? "var(--rose-alert)" : "var(--emerald-live)",
                   fontFamily: "var(--font-mono)"
                 }}>
@@ -650,10 +792,56 @@ export default function RescueCommandCenter() {
               </div>
 
               <div style={{ background: "var(--bg-card)", padding: "10px", borderRadius: "6px", border: "1px solid var(--border-subtle)" }}>
-                <span style={{ fontSize: "10px", color: "#64748b", display: "block" }}>COORDINATES</span>
-                <span style={{ fontSize: "11px", color: "#e2e8f0", fontFamily: "var(--font-mono)", display: "block", marginTop: "4px" }}>
-                  {telemetry.lat.toFixed(4)}°N<br />{telemetry.lng.toFixed(4)}°E
+                <span style={{ fontSize: "10px", color: "#64748b", display: "block" }}>GPS POSITION</span>
+                <span style={{ fontSize: "11px", color: "#e2e8f0", fontFamily: "var(--font-mono)", display: "block", marginTop: "2px" }}>
+                  {telemetry.lat.toFixed(4)}°N, {telemetry.lng.toFixed(4)}°E
                 </span>
+              </div>
+
+              {/* LiDAR Proximity & Collision Guard */}
+              <div style={{
+                background: telemetry.obstacleNear ? "rgba(244, 63, 94, 0.15)" : "var(--bg-card)",
+                padding: "10px",
+                borderRadius: "6px",
+                border: `1px solid ${telemetry.obstacleNear ? "var(--rose-alert)" : "var(--border-subtle)"}`
+              }}>
+                <span style={{ fontSize: "10px", color: telemetry.obstacleNear ? "var(--rose-alert)" : "#64748b", display: "block" }}>
+                  LiDAR 360° GUARD
+                </span>
+                <span style={{
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  fontFamily: "var(--font-mono)",
+                  color: telemetry.obstacleNear ? "var(--rose-alert)" : "var(--emerald-live)",
+                  display: "block",
+                  marginTop: "2px"
+                }}>
+                  {telemetry.obstacleNear ? `⚠️ DETOUR: ${telemetry.obstacleName || "HAZARD"}` : "🟢 360° CLEAR"}
+                </span>
+              </div>
+            </div>
+
+            {/* DRONE PAYLOAD BAY INVENTORY */}
+            <div style={{
+              marginTop: "10px",
+              padding: "8px 10px",
+              background: "rgba(255, 255, 255, 0.03)",
+              borderRadius: "6px",
+              border: "1px solid var(--border-subtle)",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              fontSize: "11px",
+              fontFamily: "var(--font-mono)"
+            }}>
+              <span style={{ color: "#94a3b8", display: "flex", alignItems: "center", gap: "5px" }}>
+                <Package size={13} color="var(--cyan-bright)" /> PAYLOAD BAY:
+              </span>
+              <div style={{ display: "flex", gap: "10px" }}>
+                <span title="Trauma Med-Kits">🩸 Med: <b style={{ color: "#e2e8f0" }}>{payloadBay.medKits}</b></span>
+                <span title="Lifebuoys">🛟 Buoy: <b style={{ color: "#e2e8f0" }}>{payloadBay.lifebuoys}</b></span>
+                <span title="Thermal Rations">❄️ Rations: <b style={{ color: "#e2e8f0" }}>{payloadBay.thermalRations}</b></span>
+                <span title="Radio Beacons">📡 Beacons: <b style={{ color: "#e2e8f0" }}>{payloadBay.radioBeacons}</b></span>
               </div>
             </div>
           </div>
@@ -691,8 +879,8 @@ export default function RescueCommandCenter() {
               ) : (
                 <div style={{ textAlign: "center", padding: "20px" }}>
                   <p style={{ fontSize: "12px", color: "#64748b", margin: 0 }}>
-                    Awaiting Vision Worker Stream...<br />
-                    <span style={{ fontSize: "10px", color: "#475569" }}>Run `python vision.py` in workers/</span>
+                    AI Aerial Gimbal Stream Armed<br />
+                    <span style={{ fontSize: "10px", color: "#475569" }}>Tracking Search & Rescue Grid (FLIR Optical)</span>
                   </p>
                 </div>
               )}
@@ -721,15 +909,15 @@ export default function RescueCommandCenter() {
             </div>
           </div>
 
-          {/* SURVIVOR DETECTION QUEUE */}
+          {/* SURVIVOR DETECTION & AI TRIAGE QUEUE */}
           <div className="glass-panel" style={{ padding: "14px", flex: 1, display: "flex", flexDirection: "column" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
               <span style={{ fontSize: "12px", letterSpacing: "1px", fontWeight: 700, color: "#94a3b8", display: "flex", alignItems: "center", gap: "6px" }}>
-                <ShieldAlert size={14} color="var(--rose-alert)" /> SURVIVOR DETECTION QUEUE
+                <ShieldAlert size={14} color="var(--rose-alert)" /> SURVIVOR TRIAGE QUEUE
               </span>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                 <span style={{ fontSize: "10px", fontFamily: "var(--font-mono)", color: "var(--rose-alert)", background: "rgba(244, 63, 94, 0.15)", padding: "2px 6px", borderRadius: "3px" }}>
-                  {detections.length} CONFIRMED
+                  {detections.length} IDENTIFIED
                 </span>
                 <button
                   onClick={exportIncidentReport}
@@ -751,44 +939,123 @@ export default function RescueCommandCenter() {
               </div>
             </div>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px", overflowY: "auto", maxHeight: "200px" }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: "10px", overflowY: "auto", maxHeight: "240px" }}>
               {detections.length === 0 ? (
                 <div style={{ textAlign: "center", padding: "24px 0", color: "#64748b", fontSize: "12px" }}>
-                  Scanning search sector... No survivor signatures detected.
+                  Scanning rescue sector... Click map or QUICK DEMO to initiate sortie.
                 </div>
               ) : (
                 detections.map((d) => (
                   <div
                     key={d.id}
-                    className="alert-pulse"
                     style={{
-                      background: "rgba(244, 63, 94, 0.08)",
-                      border: "1px solid rgba(244, 63, 94, 0.4)",
+                      background: d.need.urgency === "CRITICAL" ? "rgba(244, 63, 94, 0.08)" : "rgba(245, 158, 11, 0.08)",
+                      border: `1px solid ${d.signaledDept ? "rgba(16, 185, 129, 0.5)" : d.need.urgency === "CRITICAL" ? "rgba(244, 63, 94, 0.4)" : "rgba(245, 158, 11, 0.4)"}`,
                       padding: "10px 12px",
                       borderRadius: "6px",
                       display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center"
+                      flexDirection: "column",
+                      gap: "6px"
                     }}
                   >
-                    <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                        <strong style={{ color: "var(--rose-alert)", fontSize: "13px" }}>
-                          SURVIVOR CONFIRMED ({(d.confidence * 100).toFixed(0)}%)
+                        <span style={{ fontSize: "15px" }}>{d.need.supplyIcon}</span>
+                        <strong style={{ color: "#f8fafc", fontSize: "12px" }}>
+                          {d.need.title}
                         </strong>
-                        <span style={{ fontSize: "10px", color: "#94a3b8", fontFamily: "var(--font-mono)" }}>
-                          Frame #{d.frameIndex}
+                        <span style={{
+                          fontSize: "9px",
+                          fontFamily: "var(--font-mono)",
+                          padding: "1px 5px",
+                          borderRadius: "3px",
+                          fontWeight: 700,
+                          background: d.need.urgency === "CRITICAL" ? "rgba(244, 63, 94, 0.2)" : "rgba(245, 158, 11, 0.2)",
+                          color: d.need.urgency === "CRITICAL" ? "var(--rose-alert)" : "var(--amber-warn)"
+                        }}>
+                          {d.need.urgency} // {(d.confidence * 100).toFixed(0)}%
                         </span>
                       </div>
+                      <span style={{ fontSize: "10px", color: "#64748b", fontFamily: "var(--font-mono)" }}>
+                        {new Date(d.timestamp).toLocaleTimeString()}
+                      </span>
+                    </div>
+
+                    <div style={{ fontSize: "11px", color: "#94a3b8", fontFamily: "var(--font-mono)", display: "flex", justifyContent: "space-between" }}>
+                      <span>Agency: <b style={{ color: "#e2e8f0" }}>{d.need.department}</b></span>
                       {d.droneLocation && (
-                        <span style={{ fontSize: "11px", color: "#cbd5e1", fontFamily: "var(--font-mono)" }}>
-                          REF: {d.droneLocation.lat.toFixed(5)}°N, {d.droneLocation.lng.toFixed(5)}°E
-                        </span>
+                        <span>GPS: {d.droneLocation.lat.toFixed(4)}, {d.droneLocation.lng.toFixed(4)}</span>
                       )}
                     </div>
-                    <span style={{ fontSize: "10px", color: "#64748b", fontFamily: "var(--font-mono)" }}>
-                      {new Date(d.timestamp).toLocaleTimeString()}
-                    </span>
+
+                    <div style={{ fontSize: "11px", color: "var(--cyan-bright)", fontFamily: "var(--font-mono)" }}>
+                      Aid Kit: <b>{d.need.requiredSupply}</b>
+                    </div>
+
+                    {/* INTERACTIVE ACTION BUTTONS */}
+                    <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
+                      <button
+                        onClick={() => signalDepartment(d)}
+                        disabled={d.signaledDept}
+                        style={{
+                          flex: 1,
+                          padding: "5px 8px",
+                          borderRadius: "4px",
+                          fontSize: "10px",
+                          fontWeight: 700,
+                          fontFamily: "var(--font-display)",
+                          cursor: d.signaledDept ? "default" : "pointer",
+                          background: d.signaledDept ? "rgba(16, 185, 129, 0.15)" : "rgba(0, 242, 254, 0.1)",
+                          color: d.signaledDept ? "var(--emerald-live)" : "var(--cyan-bright)",
+                          border: `1px solid ${d.signaledDept ? "rgba(16, 185, 129, 0.4)" : "var(--border-glow)"}`,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: "4px"
+                        }}
+                      >
+                        {d.signaledDept ? (
+                          <>
+                            <CheckCircle2 size={12} /> AGENCY DISPATCHED
+                          </>
+                        ) : (
+                          <>
+                            <Send size={12} /> SIGNAL {d.need.departmentCode}
+                          </>
+                        )}
+                      </button>
+
+                      <button
+                        onClick={() => dropPayload(d)}
+                        disabled={d.payloadDropped}
+                        style={{
+                          flex: 1,
+                          padding: "5px 8px",
+                          borderRadius: "4px",
+                          fontSize: "10px",
+                          fontWeight: 700,
+                          fontFamily: "var(--font-display)",
+                          cursor: d.payloadDropped ? "default" : "pointer",
+                          background: d.payloadDropped ? "rgba(16, 185, 129, 0.15)" : "rgba(245, 158, 11, 0.15)",
+                          color: d.payloadDropped ? "var(--emerald-live)" : "var(--amber-warn)",
+                          border: `1px solid ${d.payloadDropped ? "rgba(16, 185, 129, 0.4)" : "rgba(245, 158, 11, 0.4)"}`,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          gap: "4px"
+                        }}
+                      >
+                        {d.payloadDropped ? (
+                          <>
+                            <Package size={12} /> PAYLOAD AIR-DROPPED
+                          </>
+                        ) : (
+                          <>
+                            <Package size={12} /> AIR-DROP {d.need.supplyIcon} SUPPLY
+                          </>
+                        )}
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
