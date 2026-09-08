@@ -77,6 +77,7 @@ export default function RescueCommandCenter() {
   // Dynamic Workspace Resizing & Collapse Controls
   const [sidebarWidth, setSidebarWidth] = useState(560);
   const [isCameraCollapsed, setIsCameraCollapsed] = useState(false);
+  const [isTriageMaximized, setIsTriageMaximized] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -738,10 +739,13 @@ export default function RescueCommandCenter() {
             gap: "2px"
           }}>
             <button
-              onClick={() => setSidebarWidth(440)}
+              onClick={() => {
+                setSidebarWidth(440);
+                setIsTriageMaximized(false);
+              }}
               style={{
-                background: sidebarWidth <= 460 ? "rgba(0, 242, 254, 0.2)" : "transparent",
-                color: sidebarWidth <= 460 ? "var(--cyan-bright)" : "#94a3b8",
+                background: sidebarWidth <= 460 && !isTriageMaximized ? "rgba(0, 242, 254, 0.2)" : "transparent",
+                color: sidebarWidth <= 460 && !isTriageMaximized ? "var(--cyan-bright)" : "#94a3b8",
                 border: "none",
                 borderRadius: "4px",
                 padding: "4px 8px",
@@ -755,10 +759,13 @@ export default function RescueCommandCenter() {
               MAP 70%
             </button>
             <button
-              onClick={() => setSidebarWidth(600)}
+              onClick={() => {
+                setSidebarWidth(600);
+                setIsTriageMaximized(false);
+              }}
               style={{
-                background: sidebarWidth > 460 && sidebarWidth < 720 ? "rgba(0, 242, 254, 0.2)" : "transparent",
-                color: sidebarWidth > 460 && sidebarWidth < 720 ? "var(--cyan-bright)" : "#94a3b8",
+                background: sidebarWidth > 460 && sidebarWidth < 720 && !isTriageMaximized ? "rgba(0, 242, 254, 0.2)" : "transparent",
+                color: sidebarWidth > 460 && sidebarWidth < 720 && !isTriageMaximized ? "var(--cyan-bright)" : "#94a3b8",
                 border: "none",
                 borderRadius: "4px",
                 padding: "4px 8px",
@@ -772,10 +779,13 @@ export default function RescueCommandCenter() {
               BALANCED
             </button>
             <button
-              onClick={() => setSidebarWidth(780)}
+              onClick={() => {
+                setSidebarWidth(780);
+                setIsTriageMaximized(true);
+              }}
               style={{
-                background: sidebarWidth >= 720 ? "rgba(0, 242, 254, 0.2)" : "transparent",
-                color: sidebarWidth >= 720 ? "var(--cyan-bright)" : "#94a3b8",
+                background: isTriageMaximized ? "rgba(0, 242, 254, 0.2)" : "transparent",
+                color: isTriageMaximized ? "var(--cyan-bright)" : "#94a3b8",
                 border: "none",
                 borderRadius: "4px",
                 padding: "4px 8px",
@@ -784,9 +794,9 @@ export default function RescueCommandCenter() {
                 fontFamily: "var(--font-mono)",
                 fontWeight: 600
               }}
-              title="Wide Triage View (Sidebar 780px)"
+              title="Maximize Survivor Triage Queue View"
             >
-              TRIAGE 60%
+              TRIAGE MAX
             </button>
           </div>
 
@@ -932,198 +942,265 @@ export default function RescueCommandCenter() {
           flexDirection: "column",
           gap: "12px",
           height: "100%",
-          overflow: "hidden"
+          maxHeight: "calc(100vh - 90px)",
+          overflowY: "auto",
+          paddingRight: "4px"
         }}>
           
-          {/* AVIONICS TELEMETRY DECK */}
-          <div className="glass-panel" style={{ padding: "14px", flexShrink: 0 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px", borderBottom: "1px solid var(--border-subtle)", paddingBottom: "8px" }}>
-              <span style={{ fontSize: "12px", letterSpacing: "1px", fontWeight: 700, color: "#94a3b8", display: "flex", alignItems: "center", gap: "6px" }}>
-                <Navigation size={14} color="var(--cyan-bright)" /> AVIONICS & TELEMETRY
-              </span>
-              <span style={{ fontSize: "10px", fontFamily: "var(--font-mono)", color: "var(--cyan-bright)", background: "rgba(0, 242, 254, 0.1)", padding: "2px 6px", borderRadius: "3px" }}>
-                {telemetry.source.toUpperCase()} // 5 Hz
-              </span>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
-              <div style={{ background: "var(--bg-card)", padding: "10px", borderRadius: "6px", border: "1px solid var(--border-subtle)" }}>
-                <span style={{ fontSize: "10px", color: "#64748b", display: "block" }}>ALTITUDE (AGL)</span>
-                <strong style={{ fontSize: "18px", color: "var(--cyan-bright)", fontFamily: "var(--font-mono)" }}>
-                  {telemetry.altitude.toFixed(1)} <span style={{ fontSize: "11px" }}>m</span>
-                </strong>
-              </div>
-
-              <div style={{ background: "var(--bg-card)", padding: "10px", borderRadius: "6px", border: "1px solid var(--border-subtle)" }}>
-                <span style={{ fontSize: "10px", color: "#64748b", display: "block" }}>BATTERY LEVEL</span>
-                <strong style={{
-                  fontSize: "18px",
-                  color: telemetry.battery && telemetry.battery < 25 ? "var(--rose-alert)" : "var(--emerald-live)",
-                  fontFamily: "var(--font-mono)"
-                }}>
-                  {telemetry.battery != null ? `${telemetry.battery.toFixed(0)}%` : "—"}
-                </strong>
-              </div>
-
-              <div style={{ background: "var(--bg-card)", padding: "10px", borderRadius: "6px", border: "1px solid var(--border-subtle)" }}>
-                <span style={{ fontSize: "10px", color: "#64748b", display: "block" }}>GPS POSITION</span>
-                <span style={{ fontSize: "11px", color: "#e2e8f0", fontFamily: "var(--font-mono)", display: "block", marginTop: "2px" }}>
-                  {telemetry.lat.toFixed(4)}°N, {telemetry.lng.toFixed(4)}°E
+          {/* AVIONICS TELEMETRY DECK (Auto-collapsible in Maximize Mode) */}
+          {!isTriageMaximized && (
+            <div className="glass-panel" style={{ padding: "14px", flexShrink: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px", borderBottom: "1px solid var(--border-subtle)", paddingBottom: "8px" }}>
+                <span style={{ fontSize: "12px", letterSpacing: "1px", fontWeight: 700, color: "#94a3b8", display: "flex", alignItems: "center", gap: "6px" }}>
+                  <Navigation size={14} color="var(--cyan-bright)" /> AVIONICS & TELEMETRY
+                </span>
+                <span style={{ fontSize: "10px", fontFamily: "var(--font-mono)", color: "var(--cyan-bright)", background: "rgba(0, 242, 254, 0.1)", padding: "2px 6px", borderRadius: "3px" }}>
+                  {telemetry.source.toUpperCase()} // 5 Hz
                 </span>
               </div>
 
-              {/* LiDAR Proximity & Collision Guard */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                <div style={{ background: "var(--bg-card)", padding: "10px", borderRadius: "6px", border: "1px solid var(--border-subtle)" }}>
+                  <span style={{ fontSize: "10px", color: "#64748b", display: "block" }}>ALTITUDE (AGL)</span>
+                  <strong style={{ fontSize: "18px", color: "var(--cyan-bright)", fontFamily: "var(--font-mono)" }}>
+                    {telemetry.altitude.toFixed(1)} <span style={{ fontSize: "11px" }}>m</span>
+                  </strong>
+                </div>
+
+                <div style={{ background: "var(--bg-card)", padding: "10px", borderRadius: "6px", border: "1px solid var(--border-subtle)" }}>
+                  <span style={{ fontSize: "10px", color: "#64748b", display: "block" }}>BATTERY LEVEL</span>
+                  <strong style={{
+                    fontSize: "18px",
+                    color: telemetry.battery && telemetry.battery < 25 ? "var(--rose-alert)" : "var(--emerald-live)",
+                    fontFamily: "var(--font-mono)"
+                  }}>
+                    {telemetry.battery != null ? `${telemetry.battery.toFixed(0)}%` : "—"}
+                  </strong>
+                </div>
+
+                <div style={{ background: "var(--bg-card)", padding: "10px", borderRadius: "6px", border: "1px solid var(--border-subtle)" }}>
+                  <span style={{ fontSize: "10px", color: "#64748b", display: "block" }}>GPS POSITION</span>
+                  <span style={{ fontSize: "11px", color: "#e2e8f0", fontFamily: "var(--font-mono)", display: "block", marginTop: "2px" }}>
+                    {telemetry.lat.toFixed(4)}°N, {telemetry.lng.toFixed(4)}°E
+                  </span>
+                </div>
+
+                {/* LiDAR Proximity & Collision Guard */}
+                <div style={{
+                  background: telemetry.obstacleNear ? "rgba(244, 63, 94, 0.15)" : "var(--bg-card)",
+                  padding: "10px",
+                  borderRadius: "6px",
+                  border: `1px solid ${telemetry.obstacleNear ? "var(--rose-alert)" : "var(--border-subtle)"}`
+                }}>
+                  <span style={{ fontSize: "10px", color: telemetry.obstacleNear ? "var(--rose-alert)" : "#64748b", display: "block" }}>
+                    LiDAR 360° GUARD
+                  </span>
+                  <span style={{
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    fontFamily: "var(--font-mono)",
+                    color: telemetry.obstacleNear ? "var(--rose-alert)" : "var(--emerald-live)",
+                    display: "block",
+                    marginTop: "2px"
+                  }}>
+                    {telemetry.obstacleNear ? `⚠️ DETOUR: ${telemetry.obstacleName || "HAZARD"}` : "🟢 360° CLEAR"}
+                  </span>
+                </div>
+              </div>
+
+              {/* DRONE PAYLOAD BAY INVENTORY */}
               <div style={{
-                background: telemetry.obstacleNear ? "rgba(244, 63, 94, 0.15)" : "var(--bg-card)",
-                padding: "10px",
+                marginTop: "10px",
+                padding: "8px 10px",
+                background: "rgba(255, 255, 255, 0.03)",
                 borderRadius: "6px",
-                border: `1px solid ${telemetry.obstacleNear ? "var(--rose-alert)" : "var(--border-subtle)"}`
+                border: "1px solid var(--border-subtle)",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                fontSize: "11px",
+                fontFamily: "var(--font-mono)"
               }}>
-                <span style={{ fontSize: "10px", color: telemetry.obstacleNear ? "var(--rose-alert)" : "#64748b", display: "block" }}>
-                  LiDAR 360° GUARD
+                <span style={{ color: "#94a3b8", display: "flex", alignItems: "center", gap: "5px" }}>
+                  <Package size={13} color="var(--cyan-bright)" /> PAYLOAD BAY:
                 </span>
-                <span style={{
-                  fontSize: "11px",
-                  fontWeight: 700,
-                  fontFamily: "var(--font-mono)",
-                  color: telemetry.obstacleNear ? "var(--rose-alert)" : "var(--emerald-live)",
-                  display: "block",
-                  marginTop: "2px"
-                }}>
-                  {telemetry.obstacleNear ? `⚠️ DETOUR: ${telemetry.obstacleName || "HAZARD"}` : "🟢 360° CLEAR"}
-                </span>
+                <div style={{ display: "flex", gap: "10px" }}>
+                  <span title="Trauma Med-Kits">🩸 Med: <b style={{ color: "#e2e8f0" }}>{payloadBay.medKits}</b></span>
+                  <span title="Lifebuoys">🛟 Buoy: <b style={{ color: "#e2e8f0" }}>{payloadBay.lifebuoys}</b></span>
+                  <span title="Thermal Rations">❄️ Rations: <b style={{ color: "#e2e8f0" }}>{payloadBay.thermalRations}</b></span>
+                  <span title="Radio Beacons">📡 Beacons: <b style={{ color: "#e2e8f0" }}>{payloadBay.radioBeacons}</b></span>
+                </div>
               </div>
             </div>
-
-            {/* DRONE PAYLOAD BAY INVENTORY */}
-            <div style={{
-              marginTop: "10px",
-              padding: "8px 10px",
-              background: "rgba(255, 255, 255, 0.03)",
-              borderRadius: "6px",
-              border: "1px solid var(--border-subtle)",
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              fontSize: "11px",
-              fontFamily: "var(--font-mono)"
-            }}>
-              <span style={{ color: "#94a3b8", display: "flex", alignItems: "center", gap: "5px" }}>
-                <Package size={13} color="var(--cyan-bright)" /> PAYLOAD BAY:
-              </span>
-              <div style={{ display: "flex", gap: "10px" }}>
-                <span title="Trauma Med-Kits">🩸 Med: <b style={{ color: "#e2e8f0" }}>{payloadBay.medKits}</b></span>
-                <span title="Lifebuoys">🛟 Buoy: <b style={{ color: "#e2e8f0" }}>{payloadBay.lifebuoys}</b></span>
-                <span title="Thermal Rations">❄️ Rations: <b style={{ color: "#e2e8f0" }}>{payloadBay.thermalRations}</b></span>
-                <span title="Radio Beacons">📡 Beacons: <b style={{ color: "#e2e8f0" }}>{payloadBay.radioBeacons}</b></span>
-              </div>
-            </div>
-          </div>
+          )}
 
           {/* AI AERIAL VISION STREAM (YOLO HUD) */}
-          <div className="glass-panel" style={{ padding: "14px", flexShrink: 0, transition: "all 0.2s ease" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: isCameraCollapsed ? "0" : "10px" }}>
-              <span style={{ fontSize: "12px", letterSpacing: "1px", fontWeight: 700, color: "#94a3b8", display: "flex", alignItems: "center", gap: "6px" }}>
-                <Eye size={14} color="var(--cyan-bright)" /> AI GIMBAL VISION FEED
-              </span>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <span style={{ fontSize: "10px", fontFamily: "var(--font-mono)", color: "#10b981", background: "rgba(16, 185, 129, 0.1)", padding: "2px 6px", borderRadius: "3px" }}>
-                  YOLOv8 // INFERENCE ACTIVE
+          {!isTriageMaximized && (
+            <div className="glass-panel" style={{ padding: "14px", flexShrink: 0, transition: "all 0.2s ease" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: isCameraCollapsed ? "0" : "10px" }}>
+                <span style={{ fontSize: "12px", letterSpacing: "1px", fontWeight: 700, color: "#94a3b8", display: "flex", alignItems: "center", gap: "6px" }}>
+                  <Eye size={14} color="var(--cyan-bright)" /> AI GIMBAL VISION FEED
                 </span>
-                <button
-                  onClick={() => setIsCameraCollapsed(!isCameraCollapsed)}
-                  style={{
-                    background: "rgba(255, 255, 255, 0.05)",
-                    border: "1px solid var(--border-subtle)",
-                    color: "#94a3b8",
-                    borderRadius: "4px",
-                    padding: "2px 6px",
-                    cursor: "pointer",
-                    fontSize: "10px",
-                    fontFamily: "var(--font-mono)",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "4px"
-                  }}
-                  title={isCameraCollapsed ? "Expand Camera Viewport" : "Minimize Camera to enlarge Triage Queue"}
-                >
-                  {isCameraCollapsed ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
-                  {isCameraCollapsed ? "EXPAND" : "MINIMIZE"}
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                  <span style={{ fontSize: "10px", fontFamily: "var(--font-mono)", color: "#10b981", background: "rgba(16, 185, 129, 0.1)", padding: "2px 6px", borderRadius: "3px" }}>
+                    YOLOv8 // INFERENCE ACTIVE
+                  </span>
+                  <button
+                    onClick={() => setIsCameraCollapsed(!isCameraCollapsed)}
+                    style={{
+                      background: "rgba(255, 255, 255, 0.05)",
+                      border: "1px solid var(--border-subtle)",
+                      color: "#94a3b8",
+                      borderRadius: "4px",
+                      padding: "2px 6px",
+                      cursor: "pointer",
+                      fontSize: "10px",
+                      fontFamily: "var(--font-mono)",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px"
+                    }}
+                    title={isCameraCollapsed ? "Expand Camera Viewport" : "Minimize Camera to enlarge Triage Queue"}
+                  >
+                    {isCameraCollapsed ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+                    {isCameraCollapsed ? "EXPAND" : "MINIMIZE"}
+                  </button>
+                </div>
               </div>
-            </div>
 
-            {/* Video Viewport with HUD Crosshair & Scanlines */}
-            {!isCameraCollapsed && (
-              <div className={`scanlines ${thermalMode ? "thermal-mode" : ""}`} style={{
-                position: "relative",
-                aspectRatio: "16/9",
-                background: "#000",
-                borderRadius: "6px",
-                overflow: "hidden",
-                border: "1px solid rgba(255, 255, 255, 0.1)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center"
-              }}>
-                {frameVersion > 0 ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={`${API}/api/frame?v=${frameVersion}`}
-                    alt="Aerial YOLO Feed"
-                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                  />
-                ) : (
-                  <div style={{ textAlign: "center", padding: "20px" }}>
-                    <p style={{ fontSize: "12px", color: "#64748b", margin: 0 }}>
-                      AI Aerial Gimbal Stream Armed<br />
-                      <span style={{ fontSize: "10px", color: "#475569" }}>Tracking Search & Rescue Grid (FLIR Optical)</span>
-                    </p>
-                  </div>
-                )}
-
-                {/* HUD Reticle Overlay */}
-                <div style={{
-                  position: "absolute",
-                  inset: 0,
-                  pointerEvents: "none",
+              {/* Video Viewport with HUD Crosshair & Scanlines */}
+              {!isCameraCollapsed && (
+                <div className={`scanlines ${thermalMode ? "thermal-mode" : ""}`} style={{
+                  position: "relative",
+                  aspectRatio: "16/9",
+                  background: "#000",
+                  borderRadius: "6px",
+                  overflow: "hidden",
+                  border: "1px solid rgba(255, 255, 255, 0.1)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center"
                 }}>
-                  <div style={{ width: "40px", height: "40px", border: "1px dashed rgba(0, 242, 254, 0.4)", borderRadius: "50%" }}></div>
-                  <div style={{ position: "absolute", width: "16px", height: "1px", background: "rgba(0, 242, 254, 0.6)" }}></div>
-                  <div style={{ position: "absolute", height: "16px", width: "1px", background: "rgba(0, 242, 254, 0.6)" }}></div>
-                  
-                  {/* HUD Camera Stats */}
-                  <div style={{ position: "absolute", bottom: "8px", left: "8px", fontSize: "10px", fontFamily: "var(--font-mono)", color: "var(--cyan-bright)" }}>
-                    FOV: 84° // ALT: {telemetry.altitude.toFixed(0)}m
-                  </div>
-                  <div style={{ position: "absolute", top: "8px", right: "8px", fontSize: "10px", fontFamily: "var(--font-mono)", color: "#10b981" }}>
-                    REC ● 640x480
+                  {frameVersion > 0 ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={`${API}/api/frame?v=${frameVersion}`}
+                      alt="Aerial YOLO Feed"
+                      style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                    />
+                  ) : (
+                    <div style={{ textAlign: "center", padding: "20px" }}>
+                      <p style={{ fontSize: "12px", color: "#64748b", margin: 0 }}>
+                        AI Aerial Gimbal Stream Armed<br />
+                        <span style={{ fontSize: "10px", color: "#475569" }}>Tracking Search & Rescue Grid (FLIR Optical)</span>
+                      </p>
+                    </div>
+                  )}
+
+                  {/* HUD Reticle Overlay */}
+                  <div style={{
+                    position: "absolute",
+                    inset: 0,
+                    pointerEvents: "none",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center"
+                  }}>
+                    <div style={{ width: "40px", height: "40px", border: "1px dashed rgba(0, 242, 254, 0.4)", borderRadius: "50%" }}></div>
+                    <div style={{ position: "absolute", width: "16px", height: "1px", background: "rgba(0, 242, 254, 0.6)" }}></div>
+                    <div style={{ position: "absolute", height: "16px", width: "1px", background: "rgba(0, 242, 254, 0.6)" }}></div>
+                    
+                    {/* HUD Camera Stats */}
+                    <div style={{ position: "absolute", bottom: "8px", left: "8px", fontSize: "10px", fontFamily: "var(--font-mono)", color: "var(--cyan-bright)" }}>
+                      FOV: 84° // ALT: {telemetry.altitude.toFixed(0)}m
+                    </div>
+                    <div style={{ position: "absolute", top: "8px", right: "8px", fontSize: "10px", fontFamily: "var(--font-mono)", color: "#10b981" }}>
+                      REC ● 640x480
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
+
+          {/* Quick Notice when in Maximize Mode */}
+          {isTriageMaximized && (
+            <div style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              background: "rgba(0, 242, 254, 0.08)",
+              border: "1px solid rgba(0, 242, 254, 0.25)",
+              borderRadius: "6px",
+              padding: "8px 12px",
+              fontSize: "11px",
+              fontFamily: "var(--font-mono)",
+              color: "var(--cyan-bright)"
+            }}>
+              <span>⚡ FULLSCREEN TRIAGE ACTIVE (Avionics & Video Minimized)</span>
+              <button
+                onClick={() => setIsTriageMaximized(false)}
+                style={{
+                  background: "transparent",
+                  border: "1px solid var(--cyan-bright)",
+                  color: "var(--cyan-bright)",
+                  borderRadius: "4px",
+                  padding: "3px 8px",
+                  cursor: "pointer",
+                  fontSize: "10px",
+                  fontWeight: "bold",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px"
+                }}
+              >
+                <Minimize2 size={12} /> RESTORE VIEW
+              </button>
+            </div>
+          )}
 
           {/* SURVIVOR DETECTION & AI TRIAGE QUEUE */}
           <div className="glass-panel" style={{
             padding: "14px",
-            flex: 1,
+            flex: isTriageMaximized ? "1 1 100%" : 1,
             display: "flex",
             flexDirection: "column",
-            minHeight: "280px",
+            minHeight: isTriageMaximized ? "calc(100vh - 170px)" : "320px",
+            height: isTriageMaximized ? "calc(100vh - 170px)" : undefined,
             overflow: "hidden"
           }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-              <span style={{ fontSize: "12px", letterSpacing: "1px", fontWeight: 700, color: "#94a3b8", display: "flex", alignItems: "center", gap: "6px" }}>
-                <ShieldAlert size={14} color="var(--rose-alert)" /> SURVIVOR TRIAGE QUEUE
+              <span style={{ fontSize: "13px", letterSpacing: "1px", fontWeight: 700, color: "#e2e8f0", display: "flex", alignItems: "center", gap: "6px" }}>
+                <ShieldAlert size={15} color="var(--rose-alert)" /> SURVIVOR TRIAGE QUEUE
               </span>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                 <span style={{ fontSize: "10px", fontFamily: "var(--font-mono)", color: "var(--rose-alert)", background: "rgba(244, 63, 94, 0.15)", padding: "2px 6px", borderRadius: "3px" }}>
                   {detections.length} IDENTIFIED
                 </span>
+
+                {/* Explicit Maximize / Restore Toggle Button */}
+                <button
+                  onClick={() => setIsTriageMaximized(!isTriageMaximized)}
+                  style={{
+                    background: isTriageMaximized ? "rgba(0, 242, 254, 0.2)" : "rgba(255, 255, 255, 0.06)",
+                    border: `1px solid ${isTriageMaximized ? "var(--cyan-bright)" : "var(--border-subtle)"}`,
+                    color: isTriageMaximized ? "var(--cyan-bright)" : "#94a3b8",
+                    padding: "3px 8px",
+                    borderRadius: "4px",
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    fontFamily: "var(--font-mono)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "4px"
+                  }}
+                  title={isTriageMaximized ? "Restore default sidebar view" : "Maximize Triage Queue to full height"}
+                >
+                  {isTriageMaximized ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+                  {isTriageMaximized ? "RESTORE" : "MAXIMIZE"}
+                </button>
+
                 <button
                   onClick={exportIncidentReport}
                   style={{
@@ -1150,7 +1227,9 @@ export default function RescueCommandCenter() {
               flexDirection: sidebarWidth >= 640 ? undefined : "column",
               gap: "10px",
               overflowY: "auto",
-              flex: 1
+              flex: 1,
+              maxHeight: isTriageMaximized ? "calc(100vh - 230px)" : isCameraCollapsed ? "calc(100vh - 360px)" : "360px",
+              paddingRight: "6px"
             }}>
               {detections.length === 0 ? (
                 <div style={{ textAlign: "center", padding: "24px 0", color: "#64748b", fontSize: "12px" }}>
