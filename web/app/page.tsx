@@ -176,10 +176,10 @@ export default function RescueCommandCenter() {
   useEffect(() => {
     if (!mapContainer.current) return;
 
-    const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
-    if (token) {
-      mapboxgl.accessToken = token;
-    }
+    const token =
+      process.env.NEXT_PUBLIC_MAPBOX_TOKEN ||
+      "pk.eyJ1Ijoia2FydGlrbTAxMTEiLCJhIjoiY203M3g1djRwMDJpazJqcHNodnF3cWpwaSJ9.demo_token_or_replace";
+    mapboxgl.accessToken = token;
 
     // High-contrast tactical dark map style (CartoDB Dark Matter raster tiles)
     // Works 100% reliably out of the box with zero token requirements
