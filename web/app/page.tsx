@@ -302,8 +302,9 @@ export default function RescueCommandCenter() {
 
     detections.slice(0, 15).forEach((d) => {
       if (!d.droneLocation || !map.current) return;
+      const need = d.need || EMERGENCY_NEEDS_CATALOG[0];
 
-      const markerColor = d.signaledDept ? "#10b981" : d.need.urgency === "CRITICAL" ? "#f43f5e" : "#f59e0b";
+      const markerColor = d.signaledDept ? "#10b981" : need.urgency === "CRITICAL" ? "#f43f5e" : "#f59e0b";
       const markerEl = document.createElement("div");
       markerEl.innerHTML = `
         <div style="width: 22px; height: 22px; border-radius: 50%; background: ${markerColor}; border: 2px solid white; box-shadow: 0 0 14px ${markerColor}; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: bold; color: white;">
@@ -316,9 +317,9 @@ export default function RescueCommandCenter() {
         .setPopup(
           new mapboxgl.Popup({ offset: 15 }).setHTML(`
             <div style="color: #0f172a; font-family: sans-serif; font-size: 11px; padding: 4px;">
-              <strong style="color: ${markerColor};">${d.need.title}</strong><br/>
-              Urgency: <b>${d.need.urgency}</b> | Conf: <b>${(d.confidence * 100).toFixed(0)}%</b><br/>
-              Assigned: <b>${d.need.department}</b><br/>
+              <strong style="color: ${markerColor};">${need.title}</strong><br/>
+              Urgency: <b>${need.urgency}</b> | Conf: <b>${(d.confidence * 100).toFixed(0)}%</b><br/>
+              Assigned: <b>${need.department}</b><br/>
               <span style="color: #64748b; font-size: 10px;">GPS: ${d.droneLocation.lat.toFixed(5)}, ${d.droneLocation.lng.toFixed(5)}</span>
             </div>
           `)
@@ -408,7 +409,8 @@ export default function RescueCommandCenter() {
 
       if (stepCount === 10 || stepCount === 24 || stepCount === 42) {
         playAlertSound(true);
-        const need = EMERGENCY_NEEDS_CATALOG[(stepCount / 10) % EMERGENCY_NEEDS_CATALOG.length];
+        const catalogIdx = Math.floor(stepCount / 10) % EMERGENCY_NEEDS_CATALOG.length;
+        const need = EMERGENCY_NEEDS_CATALOG[catalogIdx] || EMERGENCY_NEEDS_CATALOG[0];
         const newDet: Detection = {
           id: `det_${Date.now()}_${stepCount}`,
           confidence: 0.91 + Math.random() * 0.07,
@@ -456,28 +458,32 @@ export default function RescueCommandCenter() {
   // Signal Respective Government Relief Department
   const signalDepartment = (detection: Detection) => {
     playAlertSound(false);
+    const need = detection.need || EMERGENCY_NEEDS_CATALOG[0];
     setDetections((prev) =>
       prev.map((d) => (d.id === detection.id ? { ...d, signaledDept: true } : d))
     );
-    setActiveAlertMessage(`📡 ENCRYPTED SIGNAL TRANSMITTED: ${detection.need.department} (${detection.need.departmentCode}) acknowledged coordinates.`);
+    setActiveAlertMessage(`📡 ENCRYPTED SIGNAL TRANSMITTED: ${need.department} (${need.departmentCode}) acknowledged coordinates.`);
     setTimeout(() => setActiveAlertMessage(null), 5000);
   };
 
   // Emergency Supply Payload Air-Drop
   const dropPayload = (detection: Detection) => {
     playAlertSound(true);
+    const need = detection.need || EMERGENCY_NEEDS_CATALOG[0];
     setDetections((prev) =>
       prev.map((d) => (d.id === detection.id ? { ...d, payloadDropped: true } : d))
     );
 
     setPayloadBay((prev) => {
-      if (detection.need.category === "TRAUMA") return { ...prev, medKits: Math.max(0, prev.medKits - 1) };
-      if (detection.need.category === "FLOOD") return { ...prev, lifebuoys: Math.max(0, prev.lifebuoys - 1) };
-      if (detection.need.category === "HYPOTHERMIA") return { ...prev, thermalRations: Math.max(0, prev.thermalRations - 1) };
+      if (need.category === "TRAUMA") return { ...prev, medKits: Math.max(0, prev.medKits - 1) };
+      if (need.category === "FLOOD") return { ...prev, lifebuoys: Math.max(0, prev.lifebuoys - 1) };
+      if (need.category === "HYPOTHERMIA") return { ...prev, thermalRations: Math.max(0, prev.thermalRations - 1) };
       return { ...prev, radioBeacons: Math.max(0, prev.radioBeacons - 1) };
     });
 
-    setActiveAlertMessage(`📦 AIR-DROP RELEASED: ${detection.need.requiredSupply} successfully parachuted to (${detection.droneLocation?.lat.toFixed(4)}, ${detection.droneLocation?.lng.toFixed(4)})`);
+    const latStr = detection.droneLocation?.lat != null ? detection.droneLocation.lat.toFixed(4) : "12.9716";
+    const lngStr = detection.droneLocation?.lng != null ? detection.droneLocation.lng.toFixed(4) : "77.5946";
+    setActiveAlertMessage(`📦 AIR-DROP RELEASED: ${need.requiredSupply} successfully parachuted to (${latStr}, ${lngStr})`);
     setTimeout(() => setActiveAlertMessage(null), 6000);
   };
 
@@ -945,119 +951,122 @@ export default function RescueCommandCenter() {
                   Scanning rescue sector... Click map or QUICK DEMO to initiate sortie.
                 </div>
               ) : (
-                detections.map((d) => (
-                  <div
-                    key={d.id}
-                    style={{
-                      background: d.need.urgency === "CRITICAL" ? "rgba(244, 63, 94, 0.08)" : "rgba(245, 158, 11, 0.08)",
-                      border: `1px solid ${d.signaledDept ? "rgba(16, 185, 129, 0.5)" : d.need.urgency === "CRITICAL" ? "rgba(244, 63, 94, 0.4)" : "rgba(245, 158, 11, 0.4)"}`,
-                      padding: "10px 12px",
-                      borderRadius: "6px",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: "6px"
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                        <span style={{ fontSize: "15px" }}>{d.need.supplyIcon}</span>
-                        <strong style={{ color: "#f8fafc", fontSize: "12px" }}>
-                          {d.need.title}
-                        </strong>
-                        <span style={{
-                          fontSize: "9px",
-                          fontFamily: "var(--font-mono)",
-                          padding: "1px 5px",
-                          borderRadius: "3px",
-                          fontWeight: 700,
-                          background: d.need.urgency === "CRITICAL" ? "rgba(244, 63, 94, 0.2)" : "rgba(245, 158, 11, 0.2)",
-                          color: d.need.urgency === "CRITICAL" ? "var(--rose-alert)" : "var(--amber-warn)"
-                        }}>
-                          {d.need.urgency} // {(d.confidence * 100).toFixed(0)}%
+                detections.map((d) => {
+                  const need = d.need || EMERGENCY_NEEDS_CATALOG[0];
+                  return (
+                    <div
+                      key={d.id}
+                      style={{
+                        background: need.urgency === "CRITICAL" ? "rgba(244, 63, 94, 0.08)" : "rgba(245, 158, 11, 0.08)",
+                        border: `1px solid ${d.signaledDept ? "rgba(16, 185, 129, 0.5)" : need.urgency === "CRITICAL" ? "rgba(244, 63, 94, 0.4)" : "rgba(245, 158, 11, 0.4)"}`,
+                        padding: "10px 12px",
+                        borderRadius: "6px",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "6px"
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          <span style={{ fontSize: "15px" }}>{need.supplyIcon}</span>
+                          <strong style={{ color: "#f8fafc", fontSize: "12px" }}>
+                            {need.title}
+                          </strong>
+                          <span style={{
+                            fontSize: "9px",
+                            fontFamily: "var(--font-mono)",
+                            padding: "1px 5px",
+                            borderRadius: "3px",
+                            fontWeight: 700,
+                            background: need.urgency === "CRITICAL" ? "rgba(244, 63, 94, 0.2)" : "rgba(245, 158, 11, 0.2)",
+                            color: need.urgency === "CRITICAL" ? "var(--rose-alert)" : "var(--amber-warn)"
+                          }}>
+                            {need.urgency} // {(d.confidence * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                        <span style={{ fontSize: "10px", color: "#64748b", fontFamily: "var(--font-mono)" }}>
+                          {new Date(d.timestamp).toLocaleTimeString()}
                         </span>
                       </div>
-                      <span style={{ fontSize: "10px", color: "#64748b", fontFamily: "var(--font-mono)" }}>
-                        {new Date(d.timestamp).toLocaleTimeString()}
-                      </span>
-                    </div>
 
-                    <div style={{ fontSize: "11px", color: "#94a3b8", fontFamily: "var(--font-mono)", display: "flex", justifyContent: "space-between" }}>
-                      <span>Agency: <b style={{ color: "#e2e8f0" }}>{d.need.department}</b></span>
-                      {d.droneLocation && (
-                        <span>GPS: {d.droneLocation.lat.toFixed(4)}, {d.droneLocation.lng.toFixed(4)}</span>
-                      )}
-                    </div>
-
-                    <div style={{ fontSize: "11px", color: "var(--cyan-bright)", fontFamily: "var(--font-mono)" }}>
-                      Aid Kit: <b>{d.need.requiredSupply}</b>
-                    </div>
-
-                    {/* INTERACTIVE ACTION BUTTONS */}
-                    <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
-                      <button
-                        onClick={() => signalDepartment(d)}
-                        disabled={d.signaledDept}
-                        style={{
-                          flex: 1,
-                          padding: "5px 8px",
-                          borderRadius: "4px",
-                          fontSize: "10px",
-                          fontWeight: 700,
-                          fontFamily: "var(--font-display)",
-                          cursor: d.signaledDept ? "default" : "pointer",
-                          background: d.signaledDept ? "rgba(16, 185, 129, 0.15)" : "rgba(0, 242, 254, 0.1)",
-                          color: d.signaledDept ? "var(--emerald-live)" : "var(--cyan-bright)",
-                          border: `1px solid ${d.signaledDept ? "rgba(16, 185, 129, 0.4)" : "var(--border-glow)"}`,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          gap: "4px"
-                        }}
-                      >
-                        {d.signaledDept ? (
-                          <>
-                            <CheckCircle2 size={12} /> AGENCY DISPATCHED
-                          </>
-                        ) : (
-                          <>
-                            <Send size={12} /> SIGNAL {d.need.departmentCode}
-                          </>
+                      <div style={{ fontSize: "11px", color: "#94a3b8", fontFamily: "var(--font-mono)", display: "flex", justifyContent: "space-between" }}>
+                        <span>Agency: <b style={{ color: "#e2e8f0" }}>{need.department}</b></span>
+                        {d.droneLocation && (
+                          <span>GPS: {d.droneLocation.lat.toFixed(4)}, {d.droneLocation.lng.toFixed(4)}</span>
                         )}
-                      </button>
+                      </div>
 
-                      <button
-                        onClick={() => dropPayload(d)}
-                        disabled={d.payloadDropped}
-                        style={{
-                          flex: 1,
-                          padding: "5px 8px",
-                          borderRadius: "4px",
-                          fontSize: "10px",
-                          fontWeight: 700,
-                          fontFamily: "var(--font-display)",
-                          cursor: d.payloadDropped ? "default" : "pointer",
-                          background: d.payloadDropped ? "rgba(16, 185, 129, 0.15)" : "rgba(245, 158, 11, 0.15)",
-                          color: d.payloadDropped ? "var(--emerald-live)" : "var(--amber-warn)",
-                          border: `1px solid ${d.payloadDropped ? "rgba(16, 185, 129, 0.4)" : "rgba(245, 158, 11, 0.4)"}`,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          gap: "4px"
-                        }}
-                      >
-                        {d.payloadDropped ? (
-                          <>
-                            <Package size={12} /> PAYLOAD AIR-DROPPED
-                          </>
-                        ) : (
-                          <>
-                            <Package size={12} /> AIR-DROP {d.need.supplyIcon} SUPPLY
-                          </>
-                        )}
-                      </button>
+                      <div style={{ fontSize: "11px", color: "var(--cyan-bright)", fontFamily: "var(--font-mono)" }}>
+                        Aid Kit: <b>{need.requiredSupply}</b>
+                      </div>
+
+                      {/* INTERACTIVE ACTION BUTTONS */}
+                      <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
+                        <button
+                          onClick={() => signalDepartment(d)}
+                          disabled={d.signaledDept}
+                          style={{
+                            flex: 1,
+                            padding: "5px 8px",
+                            borderRadius: "4px",
+                            fontSize: "10px",
+                            fontWeight: 700,
+                            fontFamily: "var(--font-display)",
+                            cursor: d.signaledDept ? "default" : "pointer",
+                            background: d.signaledDept ? "rgba(16, 185, 129, 0.15)" : "rgba(0, 242, 254, 0.1)",
+                            color: d.signaledDept ? "var(--emerald-live)" : "var(--cyan-bright)",
+                            border: `1px solid ${d.signaledDept ? "rgba(16, 185, 129, 0.4)" : "var(--border-glow)"}`,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: "4px"
+                          }}
+                        >
+                          {d.signaledDept ? (
+                            <>
+                              <CheckCircle2 size={12} /> AGENCY DISPATCHED
+                            </>
+                          ) : (
+                            <>
+                              <Send size={12} /> SIGNAL {need.departmentCode}
+                            </>
+                          )}
+                        </button>
+
+                        <button
+                          onClick={() => dropPayload(d)}
+                          disabled={d.payloadDropped}
+                          style={{
+                            flex: 1,
+                            padding: "5px 8px",
+                            borderRadius: "4px",
+                            fontSize: "10px",
+                            fontWeight: 700,
+                            fontFamily: "var(--font-display)",
+                            cursor: d.payloadDropped ? "default" : "pointer",
+                            background: d.payloadDropped ? "rgba(16, 185, 129, 0.15)" : "rgba(245, 158, 11, 0.15)",
+                            color: d.payloadDropped ? "var(--emerald-live)" : "var(--amber-warn)",
+                            border: `1px solid ${d.payloadDropped ? "rgba(16, 185, 129, 0.4)" : "rgba(245, 158, 11, 0.4)"}`,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: "4px"
+                          }}
+                        >
+                          {d.payloadDropped ? (
+                            <>
+                              <Package size={12} /> PAYLOAD AIR-DROPPED
+                            </>
+                          ) : (
+                            <>
+                              <Package size={12} /> AIR-DROP {need.supplyIcon} SUPPLY
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
