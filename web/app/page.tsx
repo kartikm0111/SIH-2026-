@@ -18,7 +18,13 @@ import {
   CheckCircle2,
   Package,
   AlertTriangle,
-  Send
+  Send,
+  ChevronDown,
+  ChevronUp,
+  Maximize2,
+  Minimize2,
+  Columns,
+  LayoutGrid
 } from "lucide-react";
 import {
   Telemetry,
@@ -68,8 +74,52 @@ export default function RescueCommandCenter() {
     radioBeacons: 2
   });
 
+  // Dynamic Workspace Resizing & Collapse Controls
+  const [sidebarWidth, setSidebarWidth] = useState(560);
+  const [isCameraCollapsed, setIsCameraCollapsed] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
+
   const audioCtxRef = useRef<AudioContext | null>(null);
   const simIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const telemetryRef = useRef(telemetry);
+  telemetryRef.current = telemetry;
+  const dispatchMissionRef = useRef<(lat: number, lng: number) => void>(() => {});
+
+  const startResizing = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  };
+
+  // Draggable Splitter Mouse Handlers
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      const newWidth = Math.max(380, Math.min(window.innerWidth - 320, window.innerWidth - e.clientX));
+      setSidebarWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      if (isResizing) {
+        setIsResizing(false);
+      }
+    };
+
+    if (isResizing) {
+      window.addEventListener("mousemove", handleMouseMove);
+      window.addEventListener("mouseup", handleMouseUp);
+    }
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizing]);
+
+  // Trigger Mapbox resize whenever sidebar width changes
+  useEffect(() => {
+    if (map.current) {
+      map.current.resize();
+    }
+  }, [sidebarWidth, isResizing]);
 
   // Tactical Dual-Tone Audio Alert Chime
   const playAlertSound = (isHighPriority = true) => {
@@ -259,7 +309,7 @@ export default function RescueCommandCenter() {
 
     // Map Click -> Trigger Mission
     instance.on("click", (e) => {
-      dispatchMission(e.lngLat.lat, e.lngLat.lng);
+      dispatchMissionRef.current(e.lngLat.lat, e.lngLat.lng);
     });
 
     return () => {
@@ -334,10 +384,11 @@ export default function RescueCommandCenter() {
   const runAutonomousBrowserSortie = (targetLat: number, targetLng: number) => {
     if (simIntervalRef.current) clearInterval(simIntervalRef.current);
 
-    let curLat = telemetry.lat;
-    let curLng = telemetry.lng;
-    let curAlt = telemetry.altitude;
-    let curBatt = telemetry.battery || 95;
+    // Continue navigation from drone's current real-time coordinates
+    let curLat = telemetryRef.current.lat;
+    let curLng = telemetryRef.current.lng;
+    let curAlt = telemetryRef.current.altitude;
+    let curBatt = telemetryRef.current.battery != null ? telemetryRef.current.battery : 95;
     let stepCount = 0;
 
     const missionObj = {
@@ -352,8 +403,9 @@ export default function RescueCommandCenter() {
     simIntervalRef.current = setInterval(() => {
       stepCount++;
 
+      // If drone is at ground level, climb to 30m. If already airborne, immediately navigate!
       if (curAlt < 30) {
-        curAlt = Math.min(30, curAlt + 2.5);
+        curAlt = Math.min(30, curAlt + 3.0);
         setTelemetry((prev) => ({ ...prev, altitude: curAlt, mode: "TAKING_OFF" }));
         return;
       }
@@ -362,8 +414,18 @@ export default function RescueCommandCenter() {
       const dLng = targetLng - curLng;
       const dist = Math.hypot(dLat, dLng);
 
-      if (dist < 0.0001) {
-        setTelemetry((prev) => ({ ...prev, mode: "HOVER_SEARCHING", altitude: 30 }));
+      if (dist < 0.00015) {
+        curLat = targetLat;
+        curLng = targetLng;
+        setTelemetry((prev) => ({
+          ...prev,
+          lat: targetLat,
+          lng: targetLng,
+          mode: "HOVER_SEARCHING",
+          altitude: 30,
+          obstacleNear: false,
+          obstacleName: undefined
+        }));
         clearInterval(simIntervalRef.current!);
         return;
       }
@@ -444,15 +506,19 @@ export default function RescueCommandCenter() {
     runAutonomousBrowserSortie(targetLat, targetLng);
   };
 
+  dispatchMissionRef.current = dispatchMission;
+
   // Return to Launch (RTL)
   const triggerRTL = () => {
     playAlertSound(false);
     dispatchMission(12.9716, 77.5946);
   };
 
-  // Quick Demo Mission
+  // Quick Demo Mission from current drone coordinates
   const triggerQuickDemo = () => {
-    dispatchMission(telemetry.lat + 0.0035, telemetry.lng + 0.0042);
+    const curLat = telemetryRef.current.lat;
+    const curLng = telemetryRef.current.lng;
+    dispatchMission(curLat + 0.0035, curLng + 0.0042);
   };
 
   // Signal Respective Government Relief Department
@@ -661,6 +727,69 @@ export default function RescueCommandCenter() {
             <Target size={15} /> QUICK DEMO MISSION
           </button>
 
+          {/* Layout View Presets */}
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            background: "rgba(255, 255, 255, 0.04)",
+            borderRadius: "6px",
+            padding: "2px",
+            border: "1px solid var(--border-subtle)",
+            gap: "2px"
+          }}>
+            <button
+              onClick={() => setSidebarWidth(440)}
+              style={{
+                background: sidebarWidth <= 460 ? "rgba(0, 242, 254, 0.2)" : "transparent",
+                color: sidebarWidth <= 460 ? "var(--cyan-bright)" : "#94a3b8",
+                border: "none",
+                borderRadius: "4px",
+                padding: "4px 8px",
+                fontSize: "11px",
+                cursor: "pointer",
+                fontFamily: "var(--font-mono)",
+                fontWeight: 600
+              }}
+              title="Wide Map View (Sidebar 440px)"
+            >
+              MAP 70%
+            </button>
+            <button
+              onClick={() => setSidebarWidth(600)}
+              style={{
+                background: sidebarWidth > 460 && sidebarWidth < 720 ? "rgba(0, 242, 254, 0.2)" : "transparent",
+                color: sidebarWidth > 460 && sidebarWidth < 720 ? "var(--cyan-bright)" : "#94a3b8",
+                border: "none",
+                borderRadius: "4px",
+                padding: "4px 8px",
+                fontSize: "11px",
+                cursor: "pointer",
+                fontFamily: "var(--font-mono)",
+                fontWeight: 600
+              }}
+              title="Balanced View (Sidebar 600px)"
+            >
+              BALANCED
+            </button>
+            <button
+              onClick={() => setSidebarWidth(780)}
+              style={{
+                background: sidebarWidth >= 720 ? "rgba(0, 242, 254, 0.2)" : "transparent",
+                color: sidebarWidth >= 720 ? "var(--cyan-bright)" : "#94a3b8",
+                border: "none",
+                borderRadius: "4px",
+                padding: "4px 8px",
+                fontSize: "11px",
+                cursor: "pointer",
+                fontFamily: "var(--font-mono)",
+                fontWeight: 600
+              }}
+              title="Wide Triage View (Sidebar 780px)"
+            >
+              TRIAGE 60%
+            </button>
+          </div>
+
           <div style={{
             display: "flex",
             alignItems: "center",
@@ -706,11 +835,18 @@ export default function RescueCommandCenter() {
         </div>
       )}
 
-      {/* 2. MAIN TACTICAL WORKSPACE (MAP + SIDEBAR) */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 440px", flex: 1, gap: "14px", padding: "0 14px 14px 14px", overflow: "hidden" }}>
+      {/* 2. MAIN TACTICAL WORKSPACE (MAP + DRAGGABLE SPLITTER + SIDEBAR) */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: `1fr 10px ${sidebarWidth}px`,
+        flex: 1,
+        gap: "0",
+        padding: "0 14px 14px 14px",
+        overflow: "hidden"
+      }}>
         
         {/* LEFT: 3D TACTICAL MAP */}
-        <div className="glass-panel" style={{ position: "relative", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <div className="glass-panel" style={{ position: "relative", overflow: "hidden", display: "flex", flexDirection: "column", height: "100%" }}>
           <div ref={mapContainer} style={{ width: "100%", height: "100%" }} />
 
           {/* Interactive Tactical HUD Overlay on Map */}
@@ -764,11 +900,43 @@ export default function RescueCommandCenter() {
           </div>
         </div>
 
+        {/* DRAGGABLE RESIZE SPLITTER */}
+        <div
+          onMouseDown={startResizing}
+          style={{
+            cursor: "col-resize",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            position: "relative",
+            zIndex: 10,
+            userSelect: "none",
+            width: "10px",
+            margin: "0 2px"
+          }}
+          title="Click and drag to resize Tactical Map & Sidebar"
+        >
+          <div style={{
+            width: isResizing ? "4px" : "2px",
+            height: "50px",
+            borderRadius: "2px",
+            background: isResizing ? "var(--cyan-bright)" : "rgba(255, 255, 255, 0.2)",
+            boxShadow: isResizing ? "0 0 12px var(--cyan-bright)" : "none",
+            transition: "all 0.15s ease"
+          }} />
+        </div>
+
         {/* RIGHT: FLIGHT AVIONICS & AI VISION FEED */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "14px", overflowY: "auto", maxHeight: "calc(100vh - 100px)" }}>
+        <div style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "12px",
+          height: "100%",
+          overflow: "hidden"
+        }}>
           
           {/* AVIONICS TELEMETRY DECK */}
-          <div className="glass-panel" style={{ padding: "14px" }}>
+          <div className="glass-panel" style={{ padding: "14px", flexShrink: 0 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px", borderBottom: "1px solid var(--border-subtle)", paddingBottom: "8px" }}>
               <span style={{ fontSize: "12px", letterSpacing: "1px", fontWeight: 700, color: "#94a3b8", display: "flex", alignItems: "center", gap: "6px" }}>
                 <Navigation size={14} color="var(--cyan-bright)" /> AVIONICS & TELEMETRY
@@ -853,70 +1021,101 @@ export default function RescueCommandCenter() {
           </div>
 
           {/* AI AERIAL VISION STREAM (YOLO HUD) */}
-          <div className="glass-panel" style={{ padding: "14px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+          <div className="glass-panel" style={{ padding: "14px", flexShrink: 0, transition: "all 0.2s ease" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: isCameraCollapsed ? "0" : "10px" }}>
               <span style={{ fontSize: "12px", letterSpacing: "1px", fontWeight: 700, color: "#94a3b8", display: "flex", alignItems: "center", gap: "6px" }}>
                 <Eye size={14} color="var(--cyan-bright)" /> AI GIMBAL VISION FEED
               </span>
-              <span style={{ fontSize: "10px", fontFamily: "var(--font-mono)", color: "#10b981", background: "rgba(16, 185, 129, 0.1)", padding: "2px 6px", borderRadius: "3px" }}>
-                YOLOv8 // INFERENCE ACTIVE
-              </span>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span style={{ fontSize: "10px", fontFamily: "var(--font-mono)", color: "#10b981", background: "rgba(16, 185, 129, 0.1)", padding: "2px 6px", borderRadius: "3px" }}>
+                  YOLOv8 // INFERENCE ACTIVE
+                </span>
+                <button
+                  onClick={() => setIsCameraCollapsed(!isCameraCollapsed)}
+                  style={{
+                    background: "rgba(255, 255, 255, 0.05)",
+                    border: "1px solid var(--border-subtle)",
+                    color: "#94a3b8",
+                    borderRadius: "4px",
+                    padding: "2px 6px",
+                    cursor: "pointer",
+                    fontSize: "10px",
+                    fontFamily: "var(--font-mono)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "4px"
+                  }}
+                  title={isCameraCollapsed ? "Expand Camera Viewport" : "Minimize Camera to enlarge Triage Queue"}
+                >
+                  {isCameraCollapsed ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
+                  {isCameraCollapsed ? "EXPAND" : "MINIMIZE"}
+                </button>
+              </div>
             </div>
 
             {/* Video Viewport with HUD Crosshair & Scanlines */}
-            <div className={`scanlines ${thermalMode ? "thermal-mode" : ""}`} style={{
-              position: "relative",
-              aspectRatio: "16/9",
-              background: "#000",
-              borderRadius: "6px",
-              overflow: "hidden",
-              border: "1px solid rgba(255, 255, 255, 0.1)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center"
-            }}>
-              {frameVersion > 0 ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={`${API}/api/frame?v=${frameVersion}`}
-                  alt="Aerial YOLO Feed"
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                />
-              ) : (
-                <div style={{ textAlign: "center", padding: "20px" }}>
-                  <p style={{ fontSize: "12px", color: "#64748b", margin: 0 }}>
-                    AI Aerial Gimbal Stream Armed<br />
-                    <span style={{ fontSize: "10px", color: "#475569" }}>Tracking Search & Rescue Grid (FLIR Optical)</span>
-                  </p>
-                </div>
-              )}
-
-              {/* HUD Reticle Overlay */}
-              <div style={{
-                position: "absolute",
-                inset: 0,
-                pointerEvents: "none",
+            {!isCameraCollapsed && (
+              <div className={`scanlines ${thermalMode ? "thermal-mode" : ""}`} style={{
+                position: "relative",
+                aspectRatio: "16/9",
+                background: "#000",
+                borderRadius: "6px",
+                overflow: "hidden",
+                border: "1px solid rgba(255, 255, 255, 0.1)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center"
               }}>
-                <div style={{ width: "40px", height: "40px", border: "1px dashed rgba(0, 242, 254, 0.4)", borderRadius: "50%" }}></div>
-                <div style={{ position: "absolute", width: "16px", height: "1px", background: "rgba(0, 242, 254, 0.6)" }}></div>
-                <div style={{ position: "absolute", height: "16px", width: "1px", background: "rgba(0, 242, 254, 0.6)" }}></div>
-                
-                {/* HUD Camera Stats */}
-                <div style={{ position: "absolute", bottom: "8px", left: "8px", fontSize: "10px", fontFamily: "var(--font-mono)", color: "var(--cyan-bright)" }}>
-                  FOV: 84° // ALT: {telemetry.altitude.toFixed(0)}m
-                </div>
-                <div style={{ position: "absolute", top: "8px", right: "8px", fontSize: "10px", fontFamily: "var(--font-mono)", color: "#10b981" }}>
-                  REC ● 640x480
+                {frameVersion > 0 ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={`${API}/api/frame?v=${frameVersion}`}
+                    alt="Aerial YOLO Feed"
+                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  />
+                ) : (
+                  <div style={{ textAlign: "center", padding: "20px" }}>
+                    <p style={{ fontSize: "12px", color: "#64748b", margin: 0 }}>
+                      AI Aerial Gimbal Stream Armed<br />
+                      <span style={{ fontSize: "10px", color: "#475569" }}>Tracking Search & Rescue Grid (FLIR Optical)</span>
+                    </p>
+                  </div>
+                )}
+
+                {/* HUD Reticle Overlay */}
+                <div style={{
+                  position: "absolute",
+                  inset: 0,
+                  pointerEvents: "none",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center"
+                }}>
+                  <div style={{ width: "40px", height: "40px", border: "1px dashed rgba(0, 242, 254, 0.4)", borderRadius: "50%" }}></div>
+                  <div style={{ position: "absolute", width: "16px", height: "1px", background: "rgba(0, 242, 254, 0.6)" }}></div>
+                  <div style={{ position: "absolute", height: "16px", width: "1px", background: "rgba(0, 242, 254, 0.6)" }}></div>
+                  
+                  {/* HUD Camera Stats */}
+                  <div style={{ position: "absolute", bottom: "8px", left: "8px", fontSize: "10px", fontFamily: "var(--font-mono)", color: "var(--cyan-bright)" }}>
+                    FOV: 84° // ALT: {telemetry.altitude.toFixed(0)}m
+                  </div>
+                  <div style={{ position: "absolute", top: "8px", right: "8px", fontSize: "10px", fontFamily: "var(--font-mono)", color: "#10b981" }}>
+                    REC ● 640x480
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
 
           {/* SURVIVOR DETECTION & AI TRIAGE QUEUE */}
-          <div className="glass-panel" style={{ padding: "14px", flex: 1, display: "flex", flexDirection: "column" }}>
+          <div className="glass-panel" style={{
+            padding: "14px",
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            minHeight: "280px",
+            overflow: "hidden"
+          }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
               <span style={{ fontSize: "12px", letterSpacing: "1px", fontWeight: 700, color: "#94a3b8", display: "flex", alignItems: "center", gap: "6px" }}>
                 <ShieldAlert size={14} color="var(--rose-alert)" /> SURVIVOR TRIAGE QUEUE
@@ -945,7 +1144,14 @@ export default function RescueCommandCenter() {
               </div>
             </div>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: "10px", overflowY: "auto", maxHeight: "240px" }}>
+            <div style={{
+              display: sidebarWidth >= 640 ? "grid" : "flex",
+              gridTemplateColumns: sidebarWidth >= 640 ? "1fr 1fr" : undefined,
+              flexDirection: sidebarWidth >= 640 ? undefined : "column",
+              gap: "10px",
+              overflowY: "auto",
+              flex: 1
+            }}>
               {detections.length === 0 ? (
                 <div style={{ textAlign: "center", padding: "24px 0", color: "#64748b", fontSize: "12px" }}>
                   Scanning rescue sector... Click map or QUICK DEMO to initiate sortie.
