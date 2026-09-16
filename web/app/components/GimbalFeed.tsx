@@ -15,6 +15,11 @@ interface GimbalFeedProps {
 
 type VisionMode = "optical" | "thermal" | "nvg";
 
+function getCardinal(deg: number) {
+  const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+  return directions[Math.round(deg / 45) % 8];
+}
+
 export default function GimbalFeed({
   telemetry,
   thermalMode,
@@ -35,11 +40,11 @@ export default function GimbalFeed({
   // Sync prop thermalMode changes to visionMode
   useEffect(() => {
     if (thermalMode && visionMode !== "thermal") {
-      setVisionMode("thermal");
+      queueMicrotask(() => setVisionMode("thermal"));
     } else if (!thermalMode && visionMode === "thermal") {
-      setVisionMode("optical");
+      queueMicrotask(() => setVisionMode("optical"));
     }
-  }, [thermalMode]);
+  }, [thermalMode, visionMode]);
 
   // Handle local vision mode switch
   const handleModeChange = (mode: VisionMode) => {
@@ -58,7 +63,7 @@ export default function GimbalFeed({
     heading: 45,
     pitch: 0,
     roll: 0,
-    lastTime: performance.now(),
+    lastTime: 0,
     survivors: [
       { id: "S1", relX: 0.18, relY: -0.12, temp: 37.2, conf: 0.98, need: "CRITICAL MEDICAL AID" },
       { id: "S2", relX: -0.22, relY: 0.25, temp: 36.8, conf: 0.94, need: "RESCUE BOAT EVAC" },
@@ -539,12 +544,6 @@ export default function GimbalFeed({
     };
   }, [visionMode, zoomLevel, telemetry, detections]);
 
-  // Helper for compass headings
-  function getCardinal(deg: number) {
-    const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-    return directions[Math.round(deg / 45) % 8];
-  }
-
   return (
     <div style={{ position: "relative", width: "100%", borderRadius: "6px", overflow: "hidden", background: "#05070d", border: "1px solid rgba(255, 255, 255, 0.1)" }}>
       {/* Top Stream Status & In-Feed Control Toolbar */}
@@ -700,7 +699,7 @@ export default function GimbalFeed({
           lineHeight: 1.4
         }}>
           <div>SENSOR: {visionMode === "thermal" ? "FLIR BOSON LWIR" : visionMode === "nvg" ? "GEN-3 NVG GAAS" : "SONY 4K EXMOR"}</div>
-          <div style={{ opacity: 0.85 }}>ZOOM: {zoomLevel}.0X // FPS: {fps} // RES: 1080p</div>
+          <div style={{ opacity: 0.85 }}>ZOOM: {zoomLevel}.0X · FPS: {fps} · RES: 1080p</div>
         </div>
 
         {/* Live HUD Telemetry Overlay (Top-Right) */}
@@ -740,7 +739,7 @@ export default function GimbalFeed({
           color: "#94a3b8",
           textShadow: "0 1px 3px rgba(0, 0, 0, 0.9)"
         }}>
-          LAT: {telemetry.lat.toFixed(5)}°N // LNG: {telemetry.lng.toFixed(5)}°E // ALT: {telemetry.altitude.toFixed(0)}m AGL
+          LAT: {telemetry.lat.toFixed(5)}°N · LNG: {telemetry.lng.toFixed(5)}°E · ALT: {telemetry.altitude.toFixed(0)}m AGL
         </div>
 
         {/* Model & AI Status (Bottom-Right) */}
@@ -754,7 +753,7 @@ export default function GimbalFeed({
           color: visionMode === "thermal" ? "#f59e0b" : "#38bdf8",
           textShadow: "0 1px 3px rgba(0, 0, 0, 0.9)"
         }}>
-          YOLOv8-SAR // CONF: 98.4%
+          YOLOv8-SAR · CONF: 98.4%
         </div>
       </div>
     </div>

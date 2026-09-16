@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import { io, Socket } from "socket.io-client";
 import "mapbox-gl/dist/mapbox-gl.css";
@@ -13,8 +13,6 @@ import {
   Flame,
   Zap,
   Target,
-  FileDown,
-  RotateCcw,
   CheckCircle2,
   Package,
   AlertTriangle,
@@ -23,8 +21,6 @@ import {
   ChevronUp,
   Maximize2,
   Minimize2,
-  Columns,
-  LayoutGrid
 } from "lucide-react";
 import {
   Telemetry,
@@ -37,6 +33,8 @@ import {
 import GimbalFeed from "./components/GimbalFeed";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+type GatewayDetection = Omit<Detection, "need"> & { need?: Detection["need"] };
+type WindowWithWebkitAudio = Window & typeof globalThis & { webkitAudioContext?: typeof AudioContext };
 
 export default function RescueCommandCenter() {
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -60,7 +58,6 @@ export default function RescueCommandCenter() {
   const [mission, setMission] = useState<Mission | null>(null);
   const [detections, setDetections] = useState<Detection[]>([]);
   const [frameVersion, setFrameVersion] = useState(0);
-  const [error, setError] = useState("");
 
   // Tactical Controls & Flight Deck
   const [audioAlerts, setAudioAlerts] = useState(true);
@@ -82,10 +79,26 @@ export default function RescueCommandCenter() {
   const [isResizing, setIsResizing] = useState(false);
 
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const audioAlertsRef = useRef(audioAlerts);
   const simIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const telemetryRef = useRef(telemetry);
-  telemetryRef.current = telemetry;
   const dispatchMissionRef = useRef<(lat: number, lng: number) => void>(() => {});
+
+  useEffect(() => {
+    telemetryRef.current = telemetry;
+  }, [telemetry]);
+
+  useEffect(() => {
+    audioAlertsRef.current = audioAlerts;
+  }, [audioAlerts]);
+
+  const isWithinGeofence = (lat: number, lng: number) => {
+    const radians = (degrees: number) => (degrees * Math.PI) / 180;
+    const dLat = radians(lat - 12.9716);
+    const dLng = radians(lng - 77.5946);
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(radians(12.9716)) * Math.cos(radians(lat)) * Math.sin(dLng / 2) ** 2;
+    return 6_371_000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h)) <= 3_000;
+  };
 
   const startResizing = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -124,10 +137,10 @@ export default function RescueCommandCenter() {
   }, [sidebarWidth, isResizing]);
 
   // Tactical Dual-Tone Audio Alert Chime
-  const playAlertSound = (isHighPriority = true) => {
-    if (!audioAlerts) return;
+  const playAlertSound = useCallback((isHighPriority = true) => {
+    if (!audioAlertsRef.current) return;
     try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const AudioCtx = window.AudioContext || (window as WindowWithWebkitAudio).webkitAudioContext;
       if (!AudioCtx) return;
       if (!audioCtxRef.current) {
         audioCtxRef.current = new AudioCtx();
@@ -160,7 +173,7 @@ export default function RescueCommandCenter() {
       osc2.start(ctx.currentTime + 0.10);
       osc2.stop(ctx.currentTime + 0.32);
     } catch {}
-  };
+  }, []);
 
   // Mission Timer
   useEffect(() => {
@@ -176,13 +189,10 @@ export default function RescueCommandCenter() {
 
   // Hybrid Socket.IO & Auto Cloud Simulator Fallback
   useEffect(() => {
-    let socket: Socket | null = null;
-    try {
-      socket = io(API, { timeout: 2500, reconnectionAttempts: 2 });
+    const socket: Socket = io(API, { timeout: 2500, reconnectionAttempts: 2 });
 
       socket.on("connect", () => {
         setIsLiveHardware(true);
-        setError("");
       });
 
       socket.on("disconnect", () => {
@@ -191,6 +201,16 @@ export default function RescueCommandCenter() {
 
       socket.on("connect_error", () => {
         setIsLiveHardware(false);
+      });
+
+      socket.on("state", (data: { telemetry: Telemetry; mission: Mission | null; detections: GatewayDetection[]; frameVersion: number }) => {
+        setTelemetry(data.telemetry);
+        setMission(data.mission);
+        setFrameVersion(data.frameVersion);
+        setDetections(data.detections.map((d, index) => ({
+          ...d,
+          need: d.need || EMERGENCY_NEEDS_CATALOG[index % EMERGENCY_NEEDS_CATALOG.length],
+        })));
       });
 
       socket.on("telemetry", (data: Telemetry) => {
@@ -202,7 +222,7 @@ export default function RescueCommandCenter() {
         setMissionStartTime(Date.now());
       });
 
-      socket.on("detection", (data: any) => {
+      socket.on("detection", (data: GatewayDetection) => {
         playAlertSound(true);
         const randomNeed = EMERGENCY_NEEDS_CATALOG[Math.floor(Math.random() * EMERGENCY_NEEDS_CATALOG.length)];
         const enhanced: Detection = {
@@ -215,45 +235,26 @@ export default function RescueCommandCenter() {
       socket.on("frame", (v: number) => {
         setFrameVersion(v);
       });
-    } catch {
-      setIsLiveHardware(false);
-    }
-
     return () => {
-      socket?.disconnect();
+      socket.disconnect();
     };
-  }, [audioAlerts]);
+  }, [playAlertSound]);
 
   // Mapbox Setup with Free Dark Tactical Raster Tile Fallback
   useEffect(() => {
     if (!mapContainer.current) return;
 
-    const token =
-      process.env.NEXT_PUBLIC_MAPBOX_TOKEN ||
-      "pk.eyJ1Ijoia2FydGlrbTAxMTEiLCJhIjoiY203M3g1djRwMDJpazJqcHNodnF3cWpwaSJ9.demo_token_or_replace";
-    mapboxgl.accessToken = token;
-
-    // High-contrast tactical dark map style (CartoDB Dark Matter raster tiles)
-    // Works 100% reliably out of the box with zero token requirements
+    // A fully local vector style deliberately avoids a tile-server dependency.
+    // This keeps the operational map, markers, and safety overlays available in
+    // a venue with no Wi-Fi; field imagery can be added later as an optional layer.
     const darkTacticalStyle: mapboxgl.Style = {
       version: 8,
-      sources: {
-        "carto-dark": {
-          type: "raster",
-          tiles: [
-            "https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-            "https://b.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
-          ],
-          tileSize: 256
-        }
-      },
+      sources: {},
       layers: [
         {
-          id: "carto-dark-layer",
-          type: "raster",
-          source: "carto-dark",
-          minzoom: 0,
-          maxzoom: 20
+          id: "tactical-background",
+          type: "background",
+          paint: { "background-color": "#08111d" }
         }
       ]
     };
@@ -268,6 +269,29 @@ export default function RescueCommandCenter() {
 
     map.current = instance;
     instance.addControl(new mapboxgl.NavigationControl(), "top-right");
+
+    instance.on("load", () => {
+      const circle = Array.from({ length: 73 }, (_, index) => {
+        const bearing = (index / 72) * Math.PI * 2;
+        return [
+          77.5946 + (3000 / (111_320 * Math.cos(12.9716 * Math.PI / 180))) * Math.cos(bearing),
+          12.9716 + (3000 / 111_320) * Math.sin(bearing),
+        ];
+      });
+      const gridFeatures = Array.from({ length: 9 }, (_, index) => {
+        const offset = (index - 4) * 0.008;
+        return [
+          { type: "Feature" as const, geometry: { type: "LineString" as const, coordinates: [[77.56 + offset, 12.94], [77.56 + offset, 13.005]] }, properties: {} },
+          { type: "Feature" as const, geometry: { type: "LineString" as const, coordinates: [[77.56, 12.94 + offset], [77.63, 12.94 + offset]] }, properties: {} },
+        ];
+      }).flat();
+
+      instance.addSource("offline-grid", { type: "geojson", data: { type: "FeatureCollection", features: gridFeatures } });
+      instance.addLayer({ id: "offline-grid-lines", type: "line", source: "offline-grid", paint: { "line-color": "#1c4052", "line-opacity": 0.55, "line-width": 1 } });
+      instance.addSource("geofence", { type: "geojson", data: { type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [circle] } } });
+      instance.addLayer({ id: "geofence-fill", type: "fill", source: "geofence", paint: { "fill-color": "#00f2fe", "fill-opacity": 0.045 } });
+      instance.addLayer({ id: "geofence-line", type: "line", source: "geofence", paint: { "line-color": "#00f2fe", "line-opacity": 0.72, "line-width": 2, "line-dasharray": [2, 2] } });
+    });
 
     // Custom Drone Element with Radar Sweep
     const droneEl = document.createElement("div");
@@ -491,6 +515,11 @@ export default function RescueCommandCenter() {
 
   // Dispatch Mission (Attempts Hardware API, with instant fallback)
   const dispatchMission = async (targetLat: number, targetLng: number) => {
+    if (!isWithinGeofence(targetLat, targetLng)) {
+      setActiveAlertMessage("MISSION BLOCKED: selected waypoint exceeds the 3.0 km safety geofence.");
+      playAlertSound(true);
+      return;
+    }
     playAlertSound(false);
     try {
       const res = await fetch(`${API}/api/mission`, {
@@ -504,15 +533,30 @@ export default function RescueCommandCenter() {
         setMissionStartTime(Date.now());
         return;
       }
+      const data = await res.json().catch(() => null);
+      setActiveAlertMessage(data?.error || "Mission rejected by the flight safety controller.");
+      return;
     } catch {}
     runAutonomousBrowserSortie(targetLat, targetLng);
   };
 
-  dispatchMissionRef.current = dispatchMission;
+  useEffect(() => {
+    dispatchMissionRef.current = dispatchMission;
+  });
 
   // Return to Launch (RTL)
-  const triggerRTL = () => {
+  const triggerRTL = async () => {
     playAlertSound(false);
+    try {
+      const res = await fetch(`${API}/api/mission/rtl`, { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setMission(data);
+        setMissionStartTime(Date.now());
+        setActiveAlertMessage("RTL COMMAND ACCEPTED: aircraft returning to launch coordinates.");
+        return;
+      }
+    } catch {}
     dispatchMission(12.9716, 77.5946);
   };
 
@@ -605,7 +649,7 @@ export default function RescueCommandCenter() {
                 RESQ<span style={{ color: "var(--cyan-bright)" }}>-AI</span> COMMAND
               </h1>
               <span style={{ fontSize: "10px", color: "#64748b", fontFamily: "var(--font-mono)", letterSpacing: "1px" }}>
-                SIH-2026 // AUTONOMOUS SEARCH & RESCUE
+                SIH-2026 · AUTONOMOUS SEARCH & RESCUE
               </span>
             </div>
           </div>
@@ -956,7 +1000,7 @@ export default function RescueCommandCenter() {
                   <Navigation size={14} color="var(--cyan-bright)" /> AVIONICS & TELEMETRY
                 </span>
                 <span style={{ fontSize: "10px", fontFamily: "var(--font-mono)", color: "var(--cyan-bright)", background: "rgba(0, 242, 254, 0.1)", padding: "2px 6px", borderRadius: "3px" }}>
-                  {telemetry.source.toUpperCase()} // 5 Hz
+                  {telemetry.source.toUpperCase()} · 5 Hz
                 </span>
               </div>
 
@@ -1044,7 +1088,7 @@ export default function RescueCommandCenter() {
                 </span>
                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                   <span style={{ fontSize: "10px", fontFamily: "var(--font-mono)", color: "#10b981", background: "rgba(16, 185, 129, 0.1)", padding: "2px 6px", borderRadius: "3px" }}>
-                    YOLOv8 // INFERENCE ACTIVE
+                    YOLOv8 · INFERENCE ACTIVE
                   </span>
                   <button
                     onClick={() => setIsCameraCollapsed(!isCameraCollapsed)}
@@ -1226,7 +1270,7 @@ export default function RescueCommandCenter() {
                             background: need.urgency === "CRITICAL" ? "rgba(244, 63, 94, 0.2)" : "rgba(245, 158, 11, 0.2)",
                             color: need.urgency === "CRITICAL" ? "var(--rose-alert)" : "var(--amber-warn)"
                           }}>
-                            {need.urgency} // {(d.confidence * 100).toFixed(0)}%
+                            {need.urgency} · {(d.confidence * 100).toFixed(0)}%
                           </span>
                         </div>
                         <span style={{ fontSize: "10px", color: "#64748b", fontFamily: "var(--font-mono)" }}>

@@ -15,6 +15,9 @@ export type Mission = {
   lat: number;
   lng: number;
   altitude: number;
+  kind?: "SEARCH" | "RETURN_TO_LAUNCH";
+  status?: "ACTIVE" | "ABORTED";
+  createdAt?: string;
 };
 
 export type EmergencyNeed = {

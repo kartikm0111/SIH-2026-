@@ -1,6 +1,5 @@
 @echo off
-echo Stopping all RESQ-AI processes...
-taskkill /F /IM node.exe /T 2>nul
-taskkill /F /FI "WINDOWTITLE eq RESQ-AI*" 2>nul
-echo All demo processes stopped cleanly.
+echo Closing RESQ-AI demo windows only...
+taskkill /F /FI "WINDOWTITLE eq RESQ-AI:*" /T >nul 2>nul
+echo RESQ-AI demo processes closed. Other Node.js applications were left untouched.
 pause

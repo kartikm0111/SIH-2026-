@@ -7,19 +7,22 @@ import { Server } from "socket.io";
 const app = express();
 const server = http.createServer(app);
 
-const port = Number(process.env.PORT || 4000);
+const configuredPort = Number(process.env.PORT);
+const port = Number.isInteger(configuredPort) && configuredPort > 0 ? configuredPort : 4000;
 const origin = process.env.WEB_ORIGIN || "http://localhost:3000";
 const workerToken = process.env.WORKER_TOKEN;
+const missionRadiusMeters = Number(process.env.MISSION_RADIUS_METERS || 3000);
+const allowedOrigins = [...new Set([origin, "http://localhost:3000", "http://127.0.0.1:3000"])];
 
 if (!workerToken) {
   throw new Error("WORKER_TOKEN is required");
 }
 
 const io = new Server(server, {
-  cors: { origin: "*", methods: ["GET", "POST"] },
+  cors: { origin: allowedOrigins, methods: ["GET", "POST"] },
 });
 
-app.use(cors({ origin: "*" }));
+app.use(cors({ origin: allowedOrigins }));
 
 const home = {
   lat: Number(process.env.START_LAT || 12.9716),
@@ -39,6 +42,8 @@ let mission = null;
 let detections = [];
 let frame = null;
 let frameVersion = 0;
+let frameReceivedAt = null;
+const counters = { telemetry: 0, detections: 0, frames: 0 };
 
 const validNumber = (value) =>
   typeof value === "number" && Number.isFinite(value);
@@ -71,7 +76,46 @@ function requireWorker(req, res, next) {
 }
 
 function snapshot() {
-  return { telemetry, mission, detections, frameVersion };
+  return {
+    telemetry,
+    mission,
+    detections,
+    frameVersion,
+    frameReceivedAt,
+  };
+}
+
+function createMission({ lat, lng, kind = "SEARCH" }) {
+  return {
+    id: randomUUID(),
+    lat,
+    lng,
+    altitude: 30,
+    kind,
+    status: "ACTIVE",
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function missionManifest() {
+  return {
+    schemaVersion: "1.0",
+    incidentCode: `SAR-${new Date().toISOString().slice(0, 10)}`,
+    generatedAt: new Date().toISOString(),
+    mission,
+    homeBaseCoordinates: home,
+    safetyGeofenceRadiusMeters: missionRadiusMeters,
+    totalVictimsLocated: detections.length,
+    survivors: detections.map((detection, index) => ({
+      triageIndex: index + 1,
+      detectionId: detection.id,
+      classification: detection.label,
+      confidence: detection.confidence,
+      droneReferenceLocation: detection.droneLocation,
+      locationSource: detection.locationSource,
+      timestamp: detection.timestamp,
+    })),
+  };
 }
 
 io.on("connection", (socket) => {
@@ -90,6 +134,8 @@ app.post(
 
     frame = req.body;
     frameVersion += 1;
+    frameReceivedAt = new Date().toISOString();
+    counters.frames += 1;
 
     io.emit("frame", frameVersion);
     res.sendStatus(204);
@@ -99,7 +145,16 @@ app.post(
 app.use(express.json({ limit: "100kb" }));
 
 app.get("/health", (_, res) => {
-  res.json({ ok: true, service: "resq-ai-api" });
+  res.json({
+    ok: true,
+    service: "resq-ai-api",
+    uptimeSeconds: Math.floor(process.uptime()),
+    connectedCommandClients: io.engine.clientsCount,
+    counters,
+    frame: frame
+      ? { version: frameVersion, bytes: frame.length, receivedAt: frameReceivedAt }
+      : null,
+  });
 });
 
 app.get("/api/state", (_, res) => {
@@ -108,6 +163,11 @@ app.get("/api/state", (_, res) => {
 
 app.get("/api/mission", (_, res) => {
   res.json({ mission });
+});
+
+app.get("/api/manifest.json", (_, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json(missionManifest());
 });
 
 app.get("/api/frame", (_, res) => {
@@ -127,19 +187,13 @@ app.post("/api/mission", (req, res) => {
     return res.status(400).json({ error: "Invalid coordinates" });
   }
 
-  if (distanceMeters(home, { lat, lng }) > 3000) {
+  if (distanceMeters(home, { lat, lng }) > missionRadiusMeters) {
     return res.status(400).json({
-      error: "Choose a destination within 3 km of the starting point.",
+      error: `Choose a destination within ${missionRadiusMeters / 1000} km of the starting point.`,
     });
   }
 
-  mission = {
-    id: randomUUID(),
-    lat,
-    lng,
-    altitude: 30,
-    createdAt: new Date().toISOString(),
-  };
+  mission = createMission({ lat, lng });
 
   // Avoid displaying a previous mission's image as the new feed.
   frame = null;
@@ -148,6 +202,19 @@ app.post("/api/mission", (req, res) => {
 
   io.emit("mission", mission);
   res.status(201).json(mission);
+});
+
+app.post("/api/mission/rtl", (_, res) => {
+  mission = createMission({ ...home, kind: "RETURN_TO_LAUNCH" });
+  io.emit("mission", mission);
+  res.status(201).json(mission);
+});
+
+app.post("/api/mission/abort", (_, res) => {
+  if (!mission) return res.status(409).json({ error: "No active mission" });
+  mission = { ...mission, status: "ABORTED", completedAt: new Date().toISOString() };
+  io.emit("mission", mission);
+  res.json(mission);
 });
 
 app.post("/api/telemetry", requireWorker, (req, res) => {
@@ -180,6 +247,7 @@ app.post("/api/telemetry", requireWorker, (req, res) => {
     timestamp: new Date().toISOString(),
   };
 
+  counters.telemetry += 1;
   io.emit("telemetry", telemetry);
   res.sendStatus(204);
 });
@@ -225,6 +293,7 @@ app.post("/api/detections", requireWorker, (req, res) => {
 
   detections = [detection, ...detections].slice(0, 50);
 
+  counters.detections += 1;
   io.emit("detection", detection);
   res.status(201).json(detection);
 });

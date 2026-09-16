@@ -36,6 +36,10 @@ class MockDrone:
         self.target = mission
         self.mode = "TAKING_OFF"
 
+    def abort_mission(self):
+        self.target = None
+        self.mode = "HOLDING"
+
     def tick(self, dt):
         if not self.target:
             return
@@ -179,6 +183,11 @@ class SitlDrone:
             self.vehicle.simple_goto(destination, groundspeed=12)
             self.goto_sent = True
 
+    def abort_mission(self):
+        self.target = None
+        self.goto_sent = False
+        self.vehicle.mode = self.VehicleMode("LOITER")
+
     def telemetry(self):
         location = self.vehicle.location.global_relative_frame
         battery = self.vehicle.battery.level
@@ -221,7 +230,14 @@ def main():
             try:
                 mission = get("/api/mission")["mission"]
 
-                if mission and mission["id"] != mission_id:
+                if (
+                    mission
+                    and mission.get("status") == "ABORTED"
+                    and mission["id"] == mission_id
+                    and drone.target is not None
+                ):
+                    drone.abort_mission()
+                elif mission and mission["id"] != mission_id:
                     drone.start_mission(mission)
                     mission_id = mission["id"]
                     print("Mission accepted:", mission_id)
